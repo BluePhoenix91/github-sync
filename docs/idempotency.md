@@ -75,7 +75,7 @@ Refresh `LastSeenAt`, `SourceActorLogin`, `DisplayName` on every sight. GitHub l
 
 ### `IdentityMapping` — insert-once
 
-The mapping row records *how this actor was resolved* (configured vs. least-loaded fallback) and *which target user owns the assignment*. Replacing an existing row on re-resolution would defeat the "persistent so least-loaded fallback assignments stay stable across runs" guarantee from `data-model.md`. On attempted re-insert: treat the existing row as authoritative and skip silently. Operator-driven re-mapping is an explicit out-of-band action, not an ingestion side-effect.
+The mapping row records *how this actor was resolved* (configured vs. least-loaded fallback) and *which target user owns the assignment*. Replacing an existing row on re-resolution would defeat the "persistent so least-loaded fallback assignments stay stable across runs" guarantee from `data-model.md`. On attempted re-insert: treat the existing row as authoritative and skip silently. Operator-driven re-mapping is an explicit out-of-band action, not an automatic resolution side-effect.
 
 ### `WorkItemMapping` — insert-once
 
