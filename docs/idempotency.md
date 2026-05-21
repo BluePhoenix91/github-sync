@@ -42,6 +42,23 @@ Alternatives considered:
 
 **Caveat on the EF Core fluent API:** the exact extension method for emitting `NULLS NOT DISTINCT` from Npgsql.EntityFrameworkCore.PostgreSQL is verified when #9 lands. If the provider version we pin lacks the extension, fall back to a raw SQL migration step for that one index — the design decision (semantic uniqueness across null `SourceEventId`) does not change.
 
+### Invariant: `IssueEdited` is the only EventKind allowed to have a null `SourceEventId`
+
+GitHub's second-precision timestamps mean two events at the same `EventTime` collide on the unique key unless `SourceEventId` distinguishes them. State-changing events all have stable per-event IDs in GitHub's APIs; only `IssueEdited` does not (and even then only on some ingestion paths). The v1 rule:
+
+| EventKind | Source of `SourceEventId` |
+|---|---|
+| `IssueCreated` | Issue's GitHub numeric `id` (globally unique, not the per-repo `number`) |
+| `IssueClosed`, `IssueReopened`, `IssueAssigned`, `IssueUnassigned`, `IssueLabeled`, `IssueUnlabeled`, `IssueTyped`, `IssueUntyped`, `IssueParentAdded`, `IssueParentRemoved` | `id` of the corresponding event from `/issues/events` (or equivalent GraphQL timeline node ID) |
+| `IssueCommented` | Comment's `id` |
+| `IssueEdited` | `null` — accepted gap, see below |
+
+**Ingestion code that persists a non-`IssueEdited` event with a null `SourceEventId` is a bug.** #11/#12 must fail loud on this (throw before insert), and #13's test suite must include a case asserting that a state-transition event missing its source ID is rejected at ingest rather than silently persisted.
+
+**Hybrid ingestion (webhook + poll) must read the same ID source for the same logical event.** GitHub returns identical numeric event IDs across the REST events endpoint, the GraphQL timeline, and webhook delivery payloads, so this is preserved as long as ingestion reads the `id` field from the event object itself — not, for example, the webhook's `X-GitHub-Delivery` header, which is delivery-scoped rather than event-scoped.
+
+**Accepted gap for `IssueEdited`:** two distinct title/body edits at the same second collapse into one canonical event. The exporter will then apply only the first edit's payload to ADO, and the ADO work item silently disagrees with GitHub's current title/body. v1 accepts this because (a) title/body content fidelity is not a business-critical property of the demo data — the activity *shape* is what matters — and (b) `WorkItemMapping` keeps the source-to-target ID pairing intact, so any consumer that cares about current content can resolve back through the GitHub source. Revisit if production traffic shows back-to-back same-second edits at non-negligible rates.
+
 ## Why insert-or-ignore for `CanonicalEvent`, not skip-and-log
 
 Duplicate events during normal incremental sync are **expected**, not anomalous: fetch windows overlap, retries after partial failure replay the tail of the previous window, and webhook + poll hybrid sources will double-cover. Treating every duplicate as a CLAUDE.md "non-blocking record failure" worth a `LogWarning` would flood logs with normal-operation noise.

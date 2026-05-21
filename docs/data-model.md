@@ -91,7 +91,7 @@ The atomic unit of "something happened to an issue". One row per source interact
 | `Source` | enum (`GitHub`) | yes | |
 | `SourceEntityType` | enum (`Issue`) | yes | v1: `Issue` only |
 | `SourceEntityId` | string | yes | GitHub issue number (as string, scoped per repo) |
-| `SourceEventId` | string | no | Stable per-event ID where the source has one (e.g. comment ID). Null for events without one (e.g. title edits). |
+| `SourceEventId` | string | no | Stable per-event ID from the source. v1 invariant: null is allowed *only* for `IssueEdited` (GitHub does not surface a per-event ID for title/body edits on all ingestion paths). See [`idempotency.md`](./idempotency.md) for the per-EventKind ID source and the accepted same-second-edit gap. |
 | `EventKind` | enum | yes | See list below |
 | `EventTime` | timestamp | yes | Source-provided event time, normalised to UTC |
 | `ActorId` | Guid | no | FK to `CanonicalActor`. Null only for events with no actor (rare; system events). |
