@@ -2,7 +2,9 @@
 
 This document defines the canonical persistence model that sits between GitHub (source) and Azure DevOps (target). v1 scope is GitHub Issues to ADO work items, incremental sync only.
 
-The model is **event-sourced at issue-activity granularity**. We persist each meaningful GitHub issue interaction as a `CanonicalEvent` row. The exporter replays those events as ADO patches. We do not maintain a denormalised issue snapshot in v1 — each event is self-contained enough for the exporter to act on, and current state lives in the target tracker.
+The model is **event-sourced at issue-activity granularity**. We persist each meaningful GitHub issue interaction as a `CanonicalEvent` row. The exporter replays those events as ADO patches.
+
+**Decision: the target tracker is the source of truth for current state.** We do not maintain a denormalised issue snapshot. Each canonical event is self-contained enough for the exporter to act on, and any question of "what's the current title/state of issue #N?" is answered by reading the ADO work item, not by querying our store. This keeps writes cheap, avoids replay-vs-snapshot drift, and matches the v1 pipeline direction (we only push to ADO; we never read back from our store to serve users).
 
 ## Conventions
 
@@ -88,8 +90,7 @@ The atomic unit of "something happened to an issue". One row per source interact
 **`EventKind` values (v1):**
 
 - `IssueCreated`
-- `IssueTitleChanged`
-- `IssueDescriptionChanged`
+- `IssueEdited` — title and/or body changes (see note below)
 - `IssueLabeled`
 - `IssueUnlabeled`
 - `IssueAssigned`
@@ -99,6 +100,10 @@ The atomic unit of "something happened to an issue". One row per source interact
 - `IssueReopened`
 
 Unknown action types from GitHub are skipped-and-logged per CLAUDE.md (#12), not added as new enum values implicitly.
+
+**Note on `IssueEdited` (GitHub semantics):** the GitHub webhook fires a single `issues.edited` action for a single edit user-action, regardless of whether the title, the body, or both were changed. The webhook payload's `changes` object holds the previous values: `changes.title.from` and/or `changes.body.from` are present only for the fields that changed. We mirror this 1:1 — one user edit becomes one `IssueEdited` canonical event whose `PayloadJson` carries both deltas (when present). The mapper (#12) does not split this into two events.
+
+**Ingestion-path caveat (informs #11):** GitHub's REST issue *events* API (`/issues/events`) emits a `renamed` event for title changes but **no event at all for body changes**. If #11 picks that endpoint as the ingestion source, body edits will be invisible without snapshot diffing. The webhook path and the GraphQL `IssueTimelineItems` connection both surface body edits via the issue's updated state. #11 should pick an approach that doesn't lose body deltas.
 
 **Idempotency:** the natural composite key candidate is `(Source, SourceEntityType, SourceEntityId, EventKind, EventTime, SourceEventId)`. The exact key composition, null handling for `SourceEventId`, and conflict strategy are locked down in #8.
 
