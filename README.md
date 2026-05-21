@@ -55,6 +55,7 @@ At a high level:
 - failure behavior: skip-and-log for non-blocking record failures
 - retry behavior: exponential backoff with jitter for transient failures
 - dead-letter behavior: persist failed records for replay
+- duplicate handling: enforced at the database level via unique indexes; ingestion is idempotent at the canonical-events layer (see `docs/idempotency.md`)
 
 ## Pipeline model
 
