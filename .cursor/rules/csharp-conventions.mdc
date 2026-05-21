@@ -1,0 +1,15 @@
+---
+description: C# conventions for github-sync services and jobs
+globs: **/*.cs
+alwaysApply: false
+---
+
+# C# Conventions
+
+- Prefer primary constructors for dependency-focused classes.
+- Keep nullable reference types enabled; avoid `!` unless briefly justified inline.
+- Keep flows async end-to-end; avoid `.Result` and `.Wait()`.
+- Pass `CancellationToken` through I/O paths (API calls, DB operations, background jobs).
+- Prefer EF Core for persistence; use raw SQL only when necessary and document why.
+- Use structured logging fields for sync failures (source, external id, reason).
+- Keep adapters and mappers small and composable.

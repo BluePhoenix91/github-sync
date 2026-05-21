@@ -1,0 +1,17 @@
+---
+description: Core architecture and runtime decisions for github-sync
+alwaysApply: true
+---
+
+# Github-Sync Core Decisions
+
+- Keep scope aligned to v1: `GitHub Issues -> Azure DevOps`.
+- Use incremental synchronization of new events only.
+- Keep the two-stage pipeline: importer stores canonical events, exporter replays to destination.
+- Use PostgreSQL + EF Core as the application persistence layer.
+- Use Hangfire for recurring jobs and background processing.
+- Keep mapping behavior configuration-driven per sync configuration.
+- Use exact workflow/status mappings from source to destination.
+- Use least-loaded identity mapping for unknown GitHub actors against configured Azure DevOps users.
+- Apply skip-and-log for non-blocking record failures.
+- Persist failed records in dead-letter storage for replay.

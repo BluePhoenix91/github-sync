@@ -1,0 +1,13 @@
+---
+description: Enforce issue-first execution and parent-child workflow
+alwaysApply: true
+---
+
+# Issue Workflow Rule
+
+- Treat `docs/issue-workflow.md` as the source of truth for issue execution.
+- Do not start implementation unless there is an active issue.
+- Every executable issue must have one native GitHub parent relationship to an epic.
+- Keep issues small; split broad work into child issues before coding.
+- Ensure `area:*`, `priority:*`, and `type:*` labels are present before execution.
+- When work is complete, ensure closure criteria from `docs/issue-workflow.md` are met.
