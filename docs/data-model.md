@@ -45,12 +45,21 @@ A configured source-repo to target-project pairing. The unit of "what we sync".
 | `TargetSystem` | enum (`AzureDevOps`) | yes | Target platform |
 | `TargetOrganization` | string | yes | ADO organization |
 | `TargetProject` | string | yes | ADO project name |
-| `TargetWorkItemType` | string | yes | ADO work item type (e.g. `User Story`) |
+| `TargetTypeMapping` | jsonb | yes | Rules for resolving an incoming issue to an ADO work item type. Carries a default and optional overrides keyed by hierarchy/native GitHub issue type/label (see below). Concrete JSON shape is intentionally not pinned here — finalised when the exporter lands (#14). |
 | `Enabled` | bool | yes | If false, scheduler skips this config |
 | `CreatedAt` | timestamp | yes | |
 | `UpdatedAt` | timestamp | yes | |
 
 Uniqueness: `(Source, SourceOwner, SourceRepo, TargetSystem, TargetOrganization, TargetProject)` — same pair cannot be configured twice.
+
+**Type-mapping resolution order (informs `TargetTypeMapping` shape):**
+
+1. **Hierarchy wins.** If the source issue has a parent link (GitHub's native sub-issue relationship), it is treated as a child; if it is itself a parent of other issues or carries a configured epic indicator, it maps to ADO `Epic`. Hierarchy is preserved end-to-end — children stay children, epics stay epics.
+2. **Native GitHub issue type** (org-level feature: `Task`, `Bug`, `Feature`, plus org customs, max 25). If present, look it up in the mapping.
+3. **Label-based fallback** for repos that drive type by label convention (this repo's own `type:*` namespace is an example). Look up labels in the mapping.
+4. **Default** if nothing matched.
+
+`TargetTypeMapping` must be expressive enough to cover all four. It is jsonb to keep that flexibility without re-migrating each time we refine the rules. The exact JSON schema is owned by #14.
 
 ### `SyncCursor`
 
@@ -95,6 +104,10 @@ The atomic unit of "something happened to an issue". One row per source interact
 - `IssueUnlabeled`
 - `IssueAssigned`
 - `IssueUnassigned`
+- `IssueTyped` — native GitHub issue type set or changed
+- `IssueUntyped` — native GitHub issue type removed
+- `IssueParentAdded` — sub-issue parent linkage created (or swapped target — old parent removal is its own event)
+- `IssueParentRemoved` — sub-issue parent linkage removed
 - `IssueCommented`
 - `IssueClosed`
 - `IssueReopened`
@@ -104,6 +117,12 @@ Unknown action types from GitHub are skipped-and-logged per CLAUDE.md (#12), not
 **Note on `IssueEdited` (GitHub semantics):** the GitHub webhook fires a single `issues.edited` action for a single edit user-action, regardless of whether the title, the body, or both were changed. The webhook payload's `changes` object holds the previous values: `changes.title.from` and/or `changes.body.from` are present only for the fields that changed. We mirror this 1:1 — one user edit becomes one `IssueEdited` canonical event whose `PayloadJson` carries both deltas (when present). The mapper (#12) does not split this into two events.
 
 **Ingestion-path caveat (informs #11):** GitHub's REST issue *events* API (`/issues/events`) emits a `renamed` event for title changes but **no event at all for body changes**. If #11 picks that endpoint as the ingestion source, body edits will be invisible without snapshot diffing. The webhook path and the GraphQL `IssueTimelineItems` connection both surface body edits via the issue's updated state. #11 should pick an approach that doesn't lose body deltas.
+
+**Notes on type and parent events:**
+
+- `IssueTyped` / `IssueUntyped` mirror the GitHub webhook `typed` / `untyped` actions and carry the native issue type (if any). Org-level feature — not all source repos use it; many still drive type from labels. Both signals are handled at export time via `TargetTypeMapping`.
+- `IssueParentAdded` / `IssueParentRemoved` correspond to GitHub's sub-issue webhook actions. The payload carries the source-side parent issue identity; the exporter resolves it through `WorkItemMapping` to the target ADO ID and stamps the corresponding link (e.g. `System.LinkTypes.Hierarchy-Reverse` for ADO).
+- A swap (parent A → parent B) appears as two events in order: remove-A then add-B, matching the underlying webhook.
 
 **Idempotency:** the natural composite key candidate is `(Source, SourceEntityType, SourceEntityId, EventKind, EventTime, SourceEventId)`. The exact key composition, null handling for `SourceEventId`, and conflict strategy are locked down in #8.
 
