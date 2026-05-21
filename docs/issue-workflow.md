@@ -54,6 +54,17 @@ Before closing an issue:
 - PR references the issue (for example `Closes #123`).
 - If part of an epic, parent progress is updated.
 
+## Post-merge cleanup
+
+Once the PR closing an issue is merged:
+
+- Verify the issue is closed and its project Status is `Done`. Automation usually handles this; verify, don't assume.
+- Delete the branch on the remote (`git push origin --delete <branch>`).
+- Switch the local working copy back to `main` and fast-forward (`git checkout main && git pull --ff-only`).
+- Delete the local branch. After a squash-merge, `git branch -d` will refuse with "not fully merged" because the squash creates a new commit — confirm `main` contains the merged content first, then use `git branch -D <branch>`.
+
+Keeps the branch list scoped to in-flight work and prevents stale local branches from drifting against `main`.
+
 ## Splitting Rule
 
 If an issue grows to include multiple independent concerns, split it into smaller child issues and keep the original as a coordination issue or close it as superseded.
