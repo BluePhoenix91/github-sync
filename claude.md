@@ -61,6 +61,10 @@ GitHub actors map to a fixed set of Azure DevOps users via configuration. Unknow
 - Keep issues small and split scope when a task starts spanning multiple concerns.
 - Before closing an issue, verify acceptance criteria and link PR closure (`Closes #...`).
 
+## v1 scope philosophy
+
+When a v1 feature decision is ambiguous and the schema/architecture can support the harder behavior later without migration, prefer the simpler v1 option, document the call with an explicit revisit trigger (for example "revisit when production data shows X"), and move on. Don't gold-plate v1 with flexibility for hypothetical future requirements.
+
 ## CI/CD
 
 GitHub Actions. Repo is public since the project only handles public GitHub data, which makes Actions minutes unlimited at no cost.
