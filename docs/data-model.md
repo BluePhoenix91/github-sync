@@ -126,7 +126,7 @@ Unknown action types from GitHub are skipped-and-logged per CLAUDE.md (#12), not
 - `IssueParentAdded` / `IssueParentRemoved` correspond to GitHub's sub-issue webhook actions. The payload carries the source-side parent issue identity; the exporter resolves it through `WorkItemMapping` to the target ADO ID and stamps the corresponding link (e.g. `System.LinkTypes.Hierarchy-Reverse` for ADO).
 - A swap (parent A → parent B) appears as two events in order: remove-A then add-B, matching the underlying webhook.
 
-**Idempotency:** the natural composite key candidate is `(Source, SourceEntityType, SourceEntityId, EventKind, EventTime, SourceEventId)`. The exact key composition, null handling for `SourceEventId`, and conflict strategy are locked down in #8.
+**Idempotency:** the natural composite key is `(Source, SourceEntityType, SourceEntityId, EventKind, EventTime, SourceEventId)`. Null handling for `SourceEventId`, conflict strategy, and the EF Core unique-index sketch live in [`idempotency.md`](./idempotency.md).
 
 ### `CanonicalActor`
 
@@ -257,7 +257,7 @@ When any of these land, expect:
 
 ## What this unblocks
 
-- **#8** — idempotency key composition and unique-index design, building on the candidate composite key noted on `CanonicalEvent`.
+- **#8** — idempotency key composition and unique-index design, building on the candidate composite key noted on `CanonicalEvent`. Resolved in [`idempotency.md`](./idempotency.md).
 - **#9** — `AppDbContext` + one `IEntityTypeConfiguration` per entity above.
 - **#10** — initial EF Core migration generated from #9.
 - **#11–#13** — ingestion pipeline writes into `CanonicalEvent` and advances `SyncCursor`.
