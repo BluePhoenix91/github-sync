@@ -61,6 +61,8 @@ Uniqueness: `(Source, SourceOwner, SourceRepo, TargetSystem, TargetOrganization,
 
 `TargetTypeMapping` must be expressive enough to cover all four. It is jsonb to keep that flexibility without re-migrating each time we refine the rules. The exact JSON schema is owned by #14.
 
+**Resolution runs once per work item, at create time.** The result is persisted on `WorkItemMapping.TargetWorkItemType` and not re-derived on updates — see the immutability note on `WorkItemMapping` below for rationale and the v2 path.
+
 ### `SyncCursor`
 
 Per-configuration incremental sync state. One row per `SyncConfiguration`.
@@ -188,9 +190,12 @@ Persistent source-entity to target-entity ID mapping. Lets the exporter route up
 | `SourceEntityId` | string | yes | GitHub issue number |
 | `TargetSystem` | enum (`AzureDevOps`) | yes | |
 | `TargetEntityId` | string | yes | ADO work item ID |
+| `TargetWorkItemType` | string | yes | ADO work item type resolved at create time (e.g. `User Story`, `Bug`, `Epic`). Locked once written — see immutability note below. The exporter reads this to build type-appropriate JSON Patches on update without re-querying ADO. |
 | `CreatedAt` | timestamp | yes | |
 
 Uniqueness: `(SyncConfigurationId, Source, SourceEntityType, SourceEntityId)` and `(SyncConfigurationId, TargetSystem, TargetEntityId)`. A source entity maps to exactly one target entity and vice versa within a configuration.
+
+**v1 decision: `TargetWorkItemType` is immutable after create.** `TargetTypeMapping` resolution runs once, at the first export (`IssueCreated` event). Subsequent re-labelling, native type changes (`IssueTyped` / `IssueUntyped`), or rule-mapping changes do *not* trigger an ADO work-item-type change. Rationale: ADO's change-type operation is not a regular JSON Patch — it has process-template constraints and drops fields that don't exist on the destination type, so cheap-looking "just flip the type" exports can quietly lose data. We accept the small fidelity gap for v1, observe how often type-after-create actually changes in production, and revisit. The source-side events (`IssueTyped`, `IssueUntyped`, `IssueLabeled`, `IssueUnlabeled`) are still persisted normally — only the *target-type* derivation is locked. When we revisit, no schema change is required; the exporter gains a new branch that compares re-resolved type against `WorkItemMapping.TargetWorkItemType` and issues the ADO change-type call when they diverge.
 
 ### `DeadLetter`
 
