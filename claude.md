@@ -22,7 +22,8 @@ See `README.md` for project background and rationale.
 ## Logging and error reporting
 
 - Sentry, DSN supplied via env var `SENTRY_DSN`, never hardcoded.
-- Skip-and-log for non-blocking record failures. Use `LogWarning` with structured fields `{ Source, ExternalId, Reason }`. Throw only when the failure is systemic (auth, connectivity, schema mismatch).
+- Skip-and-log for *unexpected* non-blocking record failures (malformed payload, missing required field, unparseable value). Use `LogWarning` with structured fields `{ Source, ExternalId, Reason }`. Throw only when the failure is systemic (auth, connectivity, persistent schema mismatch).
+- *Expected* per-row occurrences — most notably dedup hits during normal incremental sync (overlapping fetch windows, retries replaying the previous tail, webhook + poll double-coverage) — are silent at the row level. Surface them via aggregate per-run metrics instead. Warning logs only retain signal value if they don't fire on by-design behaviour.
 
 ## Identity mapping
 
