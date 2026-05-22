@@ -10,16 +10,20 @@ public class SyncConfigurationConfiguration : IEntityTypeConfiguration<SyncConfi
     {
         builder.HasKey(x => x.Id);
 
+        builder.Property(x => x.SourceLocator).HasColumnType("jsonb");
+        builder.Property(x => x.TargetLocator).HasColumnType("jsonb");
         builder.Property(x => x.TargetTypeMapping).HasColumnType("jsonb");
 
+        // Postgres jsonb equality is canonicalised (sorted keys, no insignificant whitespace),
+        // so identical content with different key order still collides. Casing of keys is *not*
+        // canonicalised — LocatorJsonOptions pins serialisation to camelCase so writes are
+        // deterministic.
         builder.HasIndex(x => new
         {
             x.Source,
-            x.SourceOwner,
-            x.SourceRepo,
+            x.SourceLocator,
             x.TargetSystem,
-            x.TargetOrganization,
-            x.TargetProject,
+            x.TargetLocator,
         }).IsUnique();
 
         builder.HasOne(x => x.Cursor)

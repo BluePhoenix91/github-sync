@@ -40,17 +40,24 @@ A configured source-repo to target-project pairing. The unit of "what we sync".
 | `Id` | Guid | yes | PK |
 | `Name` | string | yes | Human-readable label for logs and the Hangfire dashboard |
 | `Source` | enum (`GitHub`) | yes | Source platform |
-| `SourceOwner` | string | yes | GitHub repo owner (org or user) |
-| `SourceRepo` | string | yes | GitHub repo name |
+| `SourceLocator` | jsonb | yes | Platform-specific address of the source. v1: `{ "owner": "...", "repo": "..." }` for `Source = GitHub`. See "Locator shapes" below. |
 | `TargetSystem` | enum (`AzureDevOps`) | yes | Target platform |
-| `TargetOrganization` | string | yes | ADO organization |
-| `TargetProject` | string | yes | ADO project name |
-| `TargetTypeMapping` | jsonb | yes | Rules for resolving an incoming issue to an ADO work item type. Carries a default and optional overrides keyed by hierarchy/native GitHub issue type/label (see below). Concrete JSON shape is intentionally not pinned here — finalised when the exporter lands (#14). |
+| `TargetLocator` | jsonb | yes | Platform-specific address of the target. v1: `{ "organization": "...", "project": "..." }` for `TargetSystem = AzureDevOps`. See "Locator shapes" below. |
+| `TargetTypeMapping` | jsonb | yes | Rules for resolving an incoming issue to a target work-item / issue type. Carries a default and optional overrides keyed by hierarchy/native issue type/label (see below). Concrete JSON shape is intentionally not pinned here — finalised when the exporter lands (#14). |
 | `Enabled` | bool | yes | If false, scheduler skips this config |
 | `CreatedAt` | timestamp | yes | |
 | `UpdatedAt` | timestamp | yes | |
 
-Uniqueness: `(Source, SourceOwner, SourceRepo, TargetSystem, TargetOrganization, TargetProject)` — same pair cannot be configured twice.
+Uniqueness: `(Source, SourceLocator, TargetSystem, TargetLocator)` — same pair cannot be configured twice. Postgres jsonb equality canonicalises key order and whitespace; key casing is fixed by `LocatorJsonOptions.Default` (camelCase) so serialised values are deterministic.
+
+**Locator shapes (v1):**
+
+| Platform | Used as | JSON shape | C# record |
+|---|---|---|---|
+| GitHub | source | `{ "owner": "<org-or-user>", "repo": "<repo>" }` | `Locators.GitHubSourceLocator(Owner, Repo)` |
+| Azure DevOps | target | `{ "organization": "<org>", "project": "<project>" }` | `Locators.AzureDevOpsTargetLocator(Organization, Project)` |
+
+**Why jsonb rather than typed columns:** the foreseeable roadmap adds ADO/Jira/Linear as both source and destination. Each has its own two-segment vocabulary (Jira: site + project key; Linear: workspace + team; ADO: organization + project). Per-platform typed columns would mean either four migrations (one per platform onboarded) or a platform-neutral but illegible naming like `Locator1`/`Locator2`. jsonb keeps the columns honest about being shape-deferred while the platform enums remain the discriminators. Application code reads the JSON via the platform-specific record in `src/GithubSync.Data/Locators/` selected by `Source` / `TargetSystem`.
 
 **Type-mapping resolution order (informs `TargetTypeMapping` shape):**
 

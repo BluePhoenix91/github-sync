@@ -16,7 +16,7 @@ See [`data-model.md`](./data-model.md) for entity definitions. Keys here build d
 
 | Entity | Natural key | Conflict strategy |
 |---|---|---|
-| `SyncConfiguration` | `(Source, SourceOwner, SourceRepo, TargetSystem, TargetOrganization, TargetProject)` | Throw on conflict (admin-managed) |
+| `SyncConfiguration` | `(Source, SourceLocator, TargetSystem, TargetLocator)` (jsonb equality is canonical for whitespace + key order; key casing fixed by `LocatorJsonOptions`) | Throw on conflict (admin-managed) |
 | `SyncCursor` | `SyncConfigurationId` | Upsert (per-config state) |
 | `CanonicalEvent` | `(Source, SourceEntityType, SourceEntityId, EventKind, EventTime, SourceEventId)` | Insert-or-ignore (`ON CONFLICT DO NOTHING`) |
 | `CanonicalActor` | `(Source, SourceActorId)` | Upsert (`LastSeenAt`, `SourceActorLogin`, `DisplayName`) |
@@ -86,11 +86,12 @@ A duplicate insert here would mean the exporter tried to create the same source 
 Stubs for `#9` (`IEntityTypeConfiguration` per entity). Final code lives in `src/GithubSync.Data/Configurations/`.
 
 ```csharp
-// SyncConfiguration
+// SyncConfiguration — SourceLocator/TargetLocator are jsonb; equality canonicalises
+// whitespace + key order, and LocatorJsonOptions pins key casing on write.
 builder.HasIndex(x => new
 {
-    x.Source, x.SourceOwner, x.SourceRepo,
-    x.TargetSystem, x.TargetOrganization, x.TargetProject
+    x.Source, x.SourceLocator,
+    x.TargetSystem, x.TargetLocator
 }).IsUnique();
 
 // SyncCursor — 1:1 with config
