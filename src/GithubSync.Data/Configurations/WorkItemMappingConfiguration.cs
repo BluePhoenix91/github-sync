@@ -10,7 +10,6 @@ public class WorkItemMappingConfiguration : IEntityTypeConfiguration<WorkItemMap
     {
         builder.HasKey(x => x.Id);
 
-        // Source side: one source entity maps to exactly one target within a config.
         builder.HasIndex(x => new
         {
             x.SyncConfigurationId,
@@ -19,7 +18,6 @@ public class WorkItemMappingConfiguration : IEntityTypeConfiguration<WorkItemMap
             x.SourceEntityId,
         }).IsUnique();
 
-        // Target side: the same target ID cannot be claimed by two different source entities.
         builder.HasIndex(x => new
         {
             x.SyncConfigurationId,

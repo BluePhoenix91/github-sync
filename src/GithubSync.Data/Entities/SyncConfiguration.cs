@@ -10,15 +10,15 @@ public class SyncConfiguration
 
     public Source Source { get; set; }
 
-    // jsonb. Shape depends on Source — see docs/data-model.md and Locators/.
-    // Deserialise via LocatorJsonOptions.Default to the platform-appropriate record.
+    // Shape depends on Source — see docs/data-model.md and Locators/.
     public required string SourceLocator { get; set; }
 
     public TargetSystem TargetSystem { get; set; }
 
-    // jsonb. Shape depends on TargetSystem — see docs/data-model.md and Locators/.
+    // Shape depends on TargetSystem — see docs/data-model.md and Locators/.
     public required string TargetLocator { get; set; }
 
+    // Shape owned by #14 — see docs/data-model.md.
     public required string TargetTypeMapping { get; set; }
 
     public bool Enabled { get; set; }

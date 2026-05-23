@@ -2,9 +2,9 @@ using System.Text.Json;
 
 namespace GithubSync.Data;
 
-// Shared serializer options for locator jsonb (de)serialization. Pinned in one place so the
-// unique index on (Source, SourceLocator, TargetSystem, TargetLocator) sees canonical values:
-// jsonb canonicalises keys and whitespace, but key *casing* depends on how we serialise.
+// Postgres jsonb canonicalises whitespace and key order but not key casing — pinning these
+// options keeps the unique index on (Source, SourceLocator, TargetSystem, TargetLocator)
+// effective.
 public static class LocatorJsonOptions
 {
     public static readonly JsonSerializerOptions Default = new()
