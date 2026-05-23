@@ -70,7 +70,7 @@ A reusable connector service that keeps target trackers populated with realistic
 
 ## Local development setup
 
-End-to-end bootstrap for a fresh clone, from no database to a running API.
+End-to-end bootstrap for a fresh clone, from no database to a running API. Run all commands from the repo root — the `dotnet ef` and `dotnet run` commands below use paths relative to it.
 
 ### Prerequisites
 
@@ -86,7 +86,7 @@ If you already have PostgreSQL 15+ running locally, skip to step 2.
 Otherwise, the lowest-friction path is Docker:
 
 ```bash
-docker run -d --name pg-githubsync -e POSTGRES_PASSWORD=<your-password> -p 5432:5432 postgres:16
+docker run -d --name pg-githubsync -e POSTGRES_PASSWORD=<your-password> -p 5432:5432 postgres:18
 ```
 
 Pick any password you like — it will only live in your local User Secrets.
