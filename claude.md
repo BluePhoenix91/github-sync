@@ -53,7 +53,7 @@ GitHub actors map to a fixed set of Azure DevOps users via configuration. Unknow
 - Commits inside a branch can be messy. Squash-merge into `main`.
 - Squash-merge title follows Conventional Commits: `feat: add Azure DevOps work-item adapter`, `fix: handle GitHub secondary rate-limit response`, `chore: bump EF Core to 9.0.2`.
 - One PR = one logical change. If the description contains "and also", split it.
-- Run `/simplify` against the branch diff before pushing any PR that touches `.cs` files. Address actionable findings; surface any skipped findings in the PR description with a one-line reason each. Doc/config-only PRs skip this step.
+- Run `/simplify` against the branch diff before pushing any PR that touches `.cs` files. Address actionable findings; surface any skipped findings in the PR description with a one-line reason each. Doc/config-only PRs skip this step. EF-generated migration files (`src/GithubSync.Data/Migrations/*.cs`) are reviewed at the source level (entity configurations + `AppDbContext`); never hand-edit them — they regenerate deterministically.
 
 ## Issue workflow
 
