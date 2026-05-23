@@ -43,6 +43,7 @@ GitHub actors map to a fixed set of Azure DevOps users via configuration. Unknow
 - Test: `dotnet test`
 - Add migration: `dotnet ef migrations add <Name> --project src/GithubSync.Data`
 - Apply migrations: `dotnet ef database update --project src/GithubSync.Data`
+- Set local AppDb connection (User Secrets, one-time per machine): `dotnet user-secrets set "ConnectionStrings:AppDb" "Host=localhost;Port=5432;Database=githubsync;Username=postgres;Password=<your-password>" --project src/GithubSync.Api`
 - Run API locally: `dotnet run --project src/GithubSync.Api`
 - Hangfire dashboard (local): http://localhost:5000/hangfire
 
