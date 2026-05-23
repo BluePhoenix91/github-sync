@@ -10,7 +10,7 @@ See [`data-model.md`](./data-model.md) for entity definitions. Keys here build d
 2. **Append-only events.** `CanonicalEvent` rows are immutable once written. Re-seeing the same source event is a no-op, not a merge.
 3. **Mutable lookup tables upsert.** `CanonicalActor` refreshes per-sight (login/display can change). `SyncCursor` is per-config state that overwrites.
 4. **One-shot mappings stay put.** `IdentityMapping` and `WorkItemMapping` are written once and never replaced — re-mapping would break the stable-assignment and stable-target-ID guarantees the rest of the pipeline relies on.
-5. **Configuration conflicts throw.** `SyncConfiguration` and `TargetUserPool` are admin-managed. Duplicate inserts indicate misconfiguration and should fail loudly.
+5. **Configuration conflicts throw.** `SyncConfiguration` and `TargetUser` are admin-managed. Duplicate inserts indicate misconfiguration and should fail loudly.
 
 ## Per-entity key and conflict strategy
 
@@ -21,7 +21,7 @@ See [`data-model.md`](./data-model.md) for entity definitions. Keys here build d
 | `CanonicalEvent` | `(Source, SourceEntityType, SourceEntityId, EventKind, EventTime, SourceEventId)` | Insert-or-ignore (`ON CONFLICT DO NOTHING`) |
 | `CanonicalActor` | `(Source, SourceActorId)` | Upsert (`LastSeenAt`, `SourceActorLogin`, `DisplayName`) |
 | `IdentityMapping` | `(CanonicalActorId, TargetSystem)` | Insert-once; treat existing as authoritative |
-| `TargetUserPool` | `(TargetSystem, TargetUserId)` | Throw on conflict (admin-managed) |
+| `TargetUser` | `(TargetSystem, TargetUserId)` | Throw on conflict (admin-managed) |
 | `WorkItemMapping` | `(SyncConfigurationId, Source, SourceEntityType, SourceEntityId)` **and** `(SyncConfigurationId, TargetSystem, TargetEntityId)` | Insert-once; treat existing as authoritative |
 | `DeadLetter` | none | Pure append; multiple failures per event allowed |
 
@@ -112,7 +112,7 @@ builder.HasIndex(x => new { x.Source, x.SourceActorId }).IsUnique();
 // IdentityMapping
 builder.HasIndex(x => new { x.CanonicalActorId, x.TargetSystem }).IsUnique();
 
-// TargetUserPool
+// TargetUser
 builder.HasIndex(x => new { x.TargetSystem, x.TargetUserId }).IsUnique();
 
 // WorkItemMapping — two unique indexes (see rationale above)

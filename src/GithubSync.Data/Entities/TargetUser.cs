@@ -2,7 +2,7 @@ using GithubSync.Data.Enums;
 
 namespace GithubSync.Data.Entities;
 
-public class TargetUserPool
+public class TargetUser
 {
     public Guid Id { get; set; }
 

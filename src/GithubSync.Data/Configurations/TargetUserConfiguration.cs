@@ -4,9 +4,9 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace GithubSync.Data.Configurations;
 
-public class TargetUserPoolConfiguration : IEntityTypeConfiguration<TargetUserPool>
+public class TargetUserConfiguration : IEntityTypeConfiguration<TargetUser>
 {
-    public void Configure(EntityTypeBuilder<TargetUserPool> builder)
+    public void Configure(EntityTypeBuilder<TargetUser> builder)
     {
         builder.HasKey(x => x.Id);
 

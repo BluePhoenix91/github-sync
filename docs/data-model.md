@@ -167,9 +167,9 @@ Maps a `CanonicalActor` to a specific ADO user. Persistent so least-loaded fallb
 
 Uniqueness: `(CanonicalActorId, TargetSystem)` — one mapping per actor per target.
 
-### `TargetUserPool`
+### `TargetUser`
 
-Configured set of ADO users available for assignment, including for the least-loaded fallback.
+A configured target user available for assignment. The set of enabled rows forms the user pool that the least-loaded fallback selects from.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
@@ -233,7 +233,7 @@ CanonicalEvent    N ──── 1 CanonicalActor   (nullable on the event side)
 CanonicalEvent    1 ──── N DeadLetter       (typically 0 or 1 per event in practice)
 
 CanonicalActor    1 ──── 0..1 IdentityMapping (per TargetSystem)
-TargetUserPool         (standalone reference; least-loaded selection queries it)
+TargetUser             (standalone reference; least-loaded selection queries the enabled rows as a pool)
 WorkItemMapping        (no FKs into CanonicalEvent — keyed by source entity identity)
 ```
 
@@ -260,7 +260,7 @@ When any of these land, expect:
 
 - New `EventKind` values, possibly new `SourceEntityType` values
 - A new entity for project-field state if board events need replay semantics
-- No structural change to `CanonicalActor`, `IdentityMapping`, `TargetUserPool`, `WorkItemMapping`, `DeadLetter` — these are platform-neutral by design.
+- No structural change to `CanonicalActor`, `IdentityMapping`, `TargetUser`, `WorkItemMapping`, `DeadLetter` — these are platform-neutral by design.
 
 ## What this unblocks
 
