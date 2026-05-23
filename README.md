@@ -67,3 +67,62 @@ The synchronization is split into two stages:
 ## Intended outcome
 
 A reusable connector service that keeps target trackers populated with realistic, continuously updated public issue activity, so downstream systems and importers can be developed, tested, and demonstrated safely.
+
+## Local development setup
+
+End-to-end bootstrap for a fresh clone, from no database to a running API. Run all commands from the repo root — the `dotnet ef` and `dotnet run` commands below use paths relative to it.
+
+### Prerequisites
+
+- .NET 10 SDK
+- PostgreSQL **15 or newer**
+
+PostgreSQL 15+ is required because the `CanonicalEvents` unique index uses `NULLS NOT DISTINCT`, a PG 15 feature. PG 14 fails to apply the Initial migration with `42601: syntax error at or near "NULLS"`. See [`docs/idempotency.md`](docs/idempotency.md) for the rationale behind that index.
+
+### 1. Run PostgreSQL
+
+If you already have PostgreSQL 15+ running locally, skip to step 2.
+
+Otherwise, the lowest-friction path is Docker:
+
+```bash
+docker run -d --name pg-githubsync -e POSTGRES_PASSWORD=<your-password> -p 5432:5432 postgres:18
+```
+
+Pick any password you like — it will only live in your local User Secrets.
+
+### 2. Create the database
+
+```bash
+createdb -h localhost -p 5432 -U postgres githubsync
+```
+
+Or via `psql`:
+
+```sql
+CREATE DATABASE githubsync;
+```
+
+### 3. Set the connection string via User Secrets
+
+The repo deliberately ships no developer-specific connection string in `appsettings*.json` (see CLAUDE.md). Local config lives in User Secrets:
+
+```bash
+dotnet user-secrets set "ConnectionStrings:AppDb" "Host=localhost;Port=5432;Database=githubsync;Username=postgres;Password=<your-password>" --project src/GithubSync.Api
+```
+
+### 4. Apply migrations
+
+```bash
+dotnet ef database update --project src/GithubSync.Data --startup-project src/GithubSync.Api
+```
+
+`--startup-project` is required because the `AppDbContext` registration and connection string live in the API project.
+
+### 5. Sanity check
+
+```bash
+dotnet run --project src/GithubSync.Api
+```
+
+The API should start without errors. To confirm the schema landed, connect with `psql` and run `\dt` — you should see the 8 app tables defined by the Initial migration.
