@@ -18,6 +18,7 @@ See `README.md` for project background and rationale.
 - Nullable reference types enabled. No `!` suppression without an inline comment explaining why, except `= null!` on EF Core required navigation properties — that's universal EF idiom (EF populates the reference on materialisation) and doesn't need a per-site comment.
 - Async end-to-end. No `.Result` or `.Wait()`. Pass `CancellationToken` through any I/O path.
 - xUnit for tests.
+- No developer-specific or secret values in committed `appsettings*.json`. Use `dotnet user-secrets` locally (see **Commands**) and env vars in deployed environments. Anything that varies per developer or per environment must not land in git.
 
 ## Logging and error reporting
 
