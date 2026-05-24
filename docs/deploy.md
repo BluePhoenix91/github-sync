@@ -169,7 +169,60 @@ Expected: `Status: 200 OK`, body `hello world`.
 
 A **self-hosted Actions runner** registered on the Lightsail box runs the workflow. The alternatives — MSDeploy (needs Web Deploy + a credentialed publish endpoint on the host) and OpenSSH/SCP (needs sshd on Windows + key management as a repo secret) — both require an inbound auth surface to harden. The runner already has direct file-system and IIS access from inside the box, so the deploy itself needs no inbound credentials. Trade-off: a long-running Actions runner service to maintain on the host.
 
-The runner is expected to carry the labels `self-hosted`, `Windows`, `lightsail`. Registering the runner on the host is a separate one-off step, not part of this workflow.
+The runner is expected to carry the labels `self-hosted`, `Windows`, `lightsail`. Registering the runner on the host is a one-off step — see **Self-hosted runner setup** below.
+
+### Self-hosted runner setup
+
+One-off provisioning on the Lightsail host. The CD workflow above does nothing useful until this is in place.
+
+**1. Register.** In the GitHub repo: **Settings → Actions → Runners → New self-hosted runner**. Select **Windows** / **x64**. GitHub generates a one-time registration token used in `config.cmd` below; copy the download URL it shows for the matching runner version (the version changes; don't hard-code one here).
+
+On the Lightsail host, in an elevated PowerShell:
+
+```powershell
+$runnerRoot = 'C:\actions-runner-github-sync'
+New-Item -ItemType Directory -Path $runnerRoot -Force | Out-Null
+Set-Location $runnerRoot
+
+# Download URL + token both come from the "New self-hosted runner" page.
+Invoke-WebRequest -Uri '<runner-download-url-from-github>' -OutFile runner.zip
+Expand-Archive -Path runner.zip -DestinationPath . -Force
+
+.\config.cmd `
+  --url https://github.com/BluePhoenix91/github-sync `
+  --token <REGISTRATION_TOKEN> `
+  --labels Windows,lightsail `
+  --unattended
+```
+
+The `self-hosted` label is added automatically; `Windows` and `lightsail` are the additional labels the workflow keys off. The directory name `C:\actions-runner-github-sync` is convention, not a requirement — pick anything outside `C:\Azureflow-QA\` so the runner's own files never live next to deploy artefacts.
+
+**2. Install as a service** so the runner survives reboots and runs unattended:
+
+```powershell
+.\svc.cmd install <DOMAIN\Account>
+.\svc.cmd start
+```
+
+The runner identity must be able to:
+
+- start and stop the `github-sync-api` IIS app pool (requires local admin, or an account explicitly granted IIS administration rights), and
+- write to `C:\Azureflow-QA\GithubSync.API` and its sibling backup folder.
+
+The simplest workable identity is **a dedicated local administrator account on the box** (separate from your console login, with its own password). Finer-grained ACLs are possible but not justified for a single-tenant host. Default `NETWORK SERVICE` will **not** work — it cannot `Stop-WebAppPool`.
+
+**3. Verify.** Trigger the workflow manually from **Actions → CD → Run workflow** on `main`. The first run should publish the API, replace the `hello world` placeholder, and leave the site serving the real app.
+
+**To replace, remove, or rotate the runner later:**
+
+```powershell
+Set-Location 'C:\actions-runner-github-sync'
+.\svc.cmd stop
+.\svc.cmd uninstall
+.\config.cmd remove --token <REMOVE_TOKEN>
+```
+
+A fresh remove-token is generated from the same Settings → Runners page.
 
 ### Steps the workflow runs
 
