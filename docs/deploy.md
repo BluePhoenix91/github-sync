@@ -24,8 +24,7 @@ Internet
    │
    ▼
 DNS: bart.consulting (Cloudflare)
-   │   A    github-sync.bart.consulting → 15.237.68.235   (DNS only)
-   │   AAAA github-sync.bart.consulting → 2a05:…:25a8     (Proxied via Cloudflare)
+   │   github-sync.bart.consulting
    ▼
 AWS Lightsail (Windows Server)
    │   IIS
@@ -36,7 +35,7 @@ AWS Lightsail (Windows Server)
 ASP.NET Core app (Kestrel, out-of-process via ANCM)
 ```
 
-**About the DNS split:** the `A` record is `DNS only` and `AAAA` is `Proxied` — inherited from the existing `scan-api.bart.consulting` setup, not a github-sync-specific design choice. github-sync is a backend API and gets no benefit from Cloudflare's path/host-rewriting features. A future cleanup pass can normalise both rows to `DNS only` once nothing else relies on the current behaviour; treat the current state as the documented baseline, not as a target.
+**About the DNS configuration:** the records were originally set up to match a sibling site's pattern rather than being designed specifically for github-sync. github-sync is a backend API and doesn't benefit from any of Cloudflare's path/host-rewriting features, so a future cleanup pass can normalise the records to a simpler configuration. Treat the current DNS as the documented baseline, not as a target — check the Cloudflare panel for the live values.
 
 ## Prerequisites on the host
 
@@ -100,8 +99,8 @@ Expected: `Status: 200 OK`, body `hello world`.
 
 ## HTTPS / certificate
 
-- **Edge cert** (seen by browsers when routing via Cloudflare, i.e. on the `AAAA` path): issued by Cloudflare automatically.
-- **Origin cert** (between Cloudflare and Lightsail on the `AAAA` path, and seen directly by `A`-path clients): issued by **Let's Encrypt via win-acme** running on the Lightsail host.
+- **Edge cert** (seen by clients routed via Cloudflare): issued by Cloudflare automatically.
+- **Origin cert** (between Cloudflare and Lightsail, and seen by any client that reaches Lightsail directly): issued by **Let's Encrypt via win-acme** running on the Lightsail host.
 
 win-acme handles renewal automatically (default 60-day schedule, well before the 90-day expiry). The HTTP `:80` binding is kept partly to allow win-acme's HTTP-01 challenge.
 
@@ -113,6 +112,6 @@ For future child issues under [#29](https://github.com/BluePhoenix91/github-sync
 
 - **Hangfire keep-alive**: prior Hangfire-bearing services on this host have needed an external health-ping to stay alive despite the disabled idle timeout. Revisit during the future Hangfire epic; if the failure mode recurs, capture it (logs, recycle events) so the next mitigation is informed rather than copied.
 - **Secrets**: when the secrets-wiring PR lands, secrets go onto the `github-sync-api` app pool's environment variables at deploy time — not into `appsettings.Production.json` on disk. This was settled on [#25](https://github.com/BluePhoenix91/github-sync/issues/25). This document gains a section then.
-- **DNS proxy mismatch**: the `A=DNS only` / `AAAA=Proxied` asymmetry is inherited and not deliberate for github-sync; normalising both rows to `DNS only` is a candidate cleanup.
+- **DNS configuration**: the current records are inherited from a sibling site rather than designed for github-sync; normalising to a simpler configuration is a candidate cleanup.
 - **Origin lockdown**: if Cloudflare ever becomes the *only* intended path to the box, the firewall can be tightened to accept HTTPS only from Cloudflare's published IP ranges. Out of scope until that becomes a real requirement.
 - **HTTPS redirect**: HTTP `:80` is not redirected to `:443` at the IIS level; add this once the API starts serving anything sensitive, or move to HSTS at the same time.
