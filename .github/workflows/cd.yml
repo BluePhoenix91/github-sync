@@ -1,0 +1,80 @@
+name: CD
+
+# Deploy mechanism: self-hosted Actions runner installed on the Lightsail box.
+# Chosen over MSDeploy (requires Web Deploy + a credentialed publish endpoint
+# on the host) and OpenSSH/SCP (requires enabling sshd on the Windows box and
+# managing key pairs as a repo secret). The runner already has direct
+# file-system and IIS access from inside the box, so the workflow needs no
+# inbound credentials for the deploy itself. Trade-off accepted: a long-running
+# Actions runner service to maintain on the host.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cd
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Publish & deploy
+    runs-on: [self-hosted, Windows, lightsail]
+    timeout-minutes: 20
+
+    env:
+      SITE_PATH: C:\Azureflow-QA\GithubSync.API
+      BACKUP_ROOT: C:\Azureflow-QA
+      APP_POOL: github-sync-api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish
+        run: dotnet publish src/GithubSync.Api/GithubSync.Api.csproj -c Release -r win-x64 --self-contained false -o publish
+
+      - name: Stop app pool
+        shell: powershell
+        run: |
+          Import-Module WebAdministration
+          if ((Get-WebAppPoolState -Name $env:APP_POOL).Value -ne 'Stopped') {
+            Stop-WebAppPool -Name $env:APP_POOL
+          }
+          $deadline = (Get-Date).AddSeconds(30)
+          while ((Get-WebAppPoolState -Name $env:APP_POOL).Value -ne 'Stopped' -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+          }
+          if ((Get-WebAppPoolState -Name $env:APP_POOL).Value -ne 'Stopped') {
+            throw "App pool '$env:APP_POOL' did not stop within 30s."
+          }
+
+      - name: Rotate backup
+        shell: powershell
+        run: |
+          Get-ChildItem -Path $env:BACKUP_ROOT -Directory -Filter "GithubSync.API.backup-*" |
+            Remove-Item -Recurse -Force
+          if (Test-Path $env:SITE_PATH) {
+            $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+            Rename-Item -Path $env:SITE_PATH -NewName "GithubSync.API.backup-$stamp"
+          }
+
+      - name: Copy publish output
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path $env:SITE_PATH -Force | Out-Null
+          Copy-Item -Path "publish\*" -Destination $env:SITE_PATH -Recurse -Force
+
+      - name: Start app pool
+        if: always()
+        shell: powershell
+        run: |
+          Import-Module WebAdministration
+          Start-WebAppPool -Name $env:APP_POOL

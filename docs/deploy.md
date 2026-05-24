@@ -12,10 +12,10 @@ What's covered:
 
 What is **not** covered yet — separate child issues under [#29](https://github.com/BluePhoenix91/github-sync/issues/29) will fill these in:
 
-- GitHub Actions CI (`dotnet build` + `dotnet test` on PR).
-- GitHub Actions CD (`dotnet publish` + ship artifact to the host).
 - Secrets wiring (Sentry DSN, GitHub PAT, ADO PAT, DB connection string).
 - Hangfire dashboard auth filter, recurring job registration, keep-alive strategy.
+
+CI lives in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (build + test on PR and on push to `main`). CD is described below.
 
 ## Topology
 
@@ -160,6 +160,52 @@ Invoke-WebRequest -Uri 'https://github-sync.bart.consulting/' -UseBasicParsing
 ```
 
 Expected: `Status: 200 OK`, body `hello world`.
+
+## CD
+
+[`.github/workflows/cd.yml`](../.github/workflows/cd.yml) deploys to this host on every merge to `main`, plus on manual `workflow_dispatch`.
+
+### Mechanism
+
+A **self-hosted Actions runner** registered on the Lightsail box runs the workflow. The alternatives — MSDeploy (needs Web Deploy + a credentialed publish endpoint on the host) and OpenSSH/SCP (needs sshd on Windows + key management as a repo secret) — both require an inbound auth surface to harden. The runner already has direct file-system and IIS access from inside the box, so the deploy itself needs no inbound credentials. Trade-off: a long-running Actions runner service to maintain on the host.
+
+The runner is expected to carry the labels `self-hosted`, `Windows`, `lightsail`. Registering the runner on the host is a separate one-off step, not part of this workflow.
+
+### Steps the workflow runs
+
+1. `actions/checkout@v4` + `actions/setup-dotnet@v4` pinned to `10.0.x`.
+2. `dotnet publish src/GithubSync.Api/GithubSync.Api.csproj -c Release -r win-x64 --self-contained false -o publish`. Framework-dependent because the host's Hosting Bundle provides the runtime.
+3. Stop the `github-sync-api` app pool and wait up to 30 seconds for the worker to exit. The stop is what releases file locks on the running binaries; a recycle alone would not.
+4. Rotate the previous publish folder to a timestamped sibling backup: `C:\Azureflow-QA\GithubSync.API` → `C:\Azureflow-QA\GithubSync.API.backup-<yyyyMMdd-HHmmss>`. Any older `GithubSync.API.backup-*` is removed first, so exactly **one** backup is kept on disk at a time.
+5. Copy the publish output into `C:\Azureflow-QA\GithubSync.API`.
+6. Start the app pool. This step runs even if an earlier step failed (`if: always()`) — leaving the pool stopped on a failed deploy would dark the site for as long as it takes someone to notice.
+
+`concurrency: { group: cd, cancel-in-progress: false }` so a second merge that lands mid-deploy queues behind the first rather than cancelling it half-way through a stop/copy/start.
+
+### Rollback
+
+After any successful or failed deploy, the immediately previous publish is on disk as `C:\Azureflow-QA\GithubSync.API.backup-<timestamp>`. Manual restore:
+
+```powershell
+Import-Module WebAdministration
+Stop-WebAppPool -Name 'github-sync-api'
+Remove-Item -Recurse -Force 'C:\Azureflow-QA\GithubSync.API'
+Rename-Item 'C:\Azureflow-QA\GithubSync.API.backup-<timestamp>' 'GithubSync.API'
+Start-WebAppPool -Name 'github-sync-api'
+```
+
+Only the most recent backup is preserved, so the rollback window covers the **immediately previous** publish, not arbitrary history. If a bad deploy is caught after another deploy has already overwritten the backup, recovery is by re-deploying an earlier commit from `main`, not by disk rollback.
+
+### Database migrations
+
+`dotnet ef database update` is **not** run from CD. Migrations stay a manual, gated step — applied after explicit review against the target environment.
+
+### Failure modes
+
+- **Build or publish fails**: workflow stops before touching the host. No state change.
+- **Stop-pool timeout** (worker process won't exit within 30s): workflow fails red and stops. The site keeps serving the previous version. Investigate the worker on the host (`Get-Process w3wp`).
+- **Copy fails mid-way**: the workflow still starts the pool, so the site comes up against partial files and will likely return errors. Use the manual rollback above.
+- **Start-pool fails**: requires manual intervention via IIS Manager. Site is down until resolved.
 
 ## HTTPS / certificate
 
