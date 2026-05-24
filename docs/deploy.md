@@ -7,11 +7,11 @@ How the github-sync API is hosted. Companion to the Host + CI/CD epic ([#29](htt
 What's covered:
 
 - IIS site, app pool, bindings, and environment configuration on the Lightsail host ([#31](https://github.com/BluePhoenix91/github-sync/issues/31)).
+- Database and role provisioning on the colocated Postgres instance ([#33](https://github.com/BluePhoenix91/github-sync/issues/33)).
 - HTTPS topology and cert source.
 
 What is **not** covered yet — separate child issues under [#29](https://github.com/BluePhoenix91/github-sync/issues/29) will fill these in:
 
-- Database provisioning on the colocated Postgres instance.
 - GitHub Actions CI (`dotnet build` + `dotnet test` on PR).
 - GitHub Actions CD (`dotnet publish` + ship artifact to the host).
 - Secrets wiring (Sentry DSN, GitHub PAT, ADO PAT, DB connection string).
@@ -42,7 +42,7 @@ ASP.NET Core app (Kestrel, out-of-process via ANCM)
 - **Windows Server** (already in place, hosting other IIS sites).
 - **IIS** with the Static Content, ASP.NET Core Module v2 (ANCM), and Default Document features (all included by the Hosting Bundle below).
 - **ASP.NET Core 10 Hosting Bundle** installed. Verify with `dotnet --info` — output should list a `Microsoft.AspNetCore.App 10.x` runtime.
-- **PostgreSQL** running on the box (separate concern; consumed by this app once DB provisioning lands).
+- **PostgreSQL 15+** running on the box. The `Database` section below carves out a dedicated DB and role on this existing server.
 - **win-acme** installed for HTTPS cert issuance and renewal.
 
 If `dotnet --info` does not show the .NET 10 runtime, download the Hosting Bundle from <https://dotnet.microsoft.com/download/dotnet/10.0> and install. The bundle includes the runtime, the ASP.NET Core runtime, and the IIS module.
@@ -75,6 +75,70 @@ If memory pressure ever becomes a real problem on this box, "Private Memory Limi
 - **`ASPNETCORE_ENVIRONMENT=Production`** — set as a **system-wide** environment variable on the host. The host serves this single environment, so per-pool scoping isn't needed and the existing setting is left in place.
 - **`ASPNETCORE_URLS`** — **not set anywhere**. Under the IIS in-process ANCM hosting model, IIS hands the port to Kestrel via internal environment variables (`ASPNETCORE_PORT`, `ASPNETCORE_TOKEN`). Setting `ASPNETCORE_URLS` would compete with that and is a known source of misconfiguration. Resist the urge to add it "just in case".
 - **App-pool-scoped environment variables**: none in this PR. The future secrets-wiring child issue under [#29](https://github.com/BluePhoenix91/github-sync/issues/29) introduces these for things like `Sentry__Dsn`, `ConnectionStrings__AppDb`, etc.
+
+## Database
+
+The app uses a dedicated database and role on the **existing** PostgreSQL server already running on this host. We do not stand up a separate Postgres instance and we do not use Lightsail managed PostgreSQL.
+
+| | Value |
+|---|---|
+| Server | `localhost:5432` (colocated with IIS on the Lightsail box) |
+| Database | `github_sync` |
+| Role | `github_sync` (owns the database) |
+| Connection-string shape | `Host=localhost;Port=5432;Database=github_sync;Username=github_sync;Password=<from env>` |
+
+The password is not stored in this repo. It is set on the host as the `ConnectionStrings__AppDb` environment variable on the `github-sync-api` app pool — wired in by the secrets child issue under [#29](https://github.com/BluePhoenix91/github-sync/issues/29).
+
+`sslmode` is intentionally omitted: traffic stays on `localhost` so a TLS handshake adds cost without crossing any trust boundary. Npgsql's default (`Prefer`) negotiates TLS if the server offers it and falls back to plaintext otherwise — appropriate for loopback. If Postgres is ever moved off-box, revisit and pin `sslmode=Require` (or stronger).
+
+### Provisioning
+
+Run once on the Lightsail host, as a Postgres superuser (typically `postgres`):
+
+```sql
+-- 1. Role with login. Pick a strong password; it never lands in this repo.
+CREATE ROLE github_sync WITH LOGIN PASSWORD '<choose-a-strong-password>';
+
+-- 2. Database owned by the app role.
+CREATE DATABASE github_sync OWNER github_sync;
+
+-- 3. Hand ownership of the default `public` schema to the app role.
+--    Required since PostgreSQL 15, where `public` is no longer writable by
+--    non-owners. Lets the role CREATE TABLE in `public` and CREATE SCHEMA
+--    for `hangfire` (and any future schemas) without further grants.
+\c github_sync
+ALTER SCHEMA public OWNER TO github_sync;
+```
+
+The role owns both the database and the `public` schema. EF Core migrations and Hangfire's `hangfire` schema bootstrap both run as this role and will not need extra grants.
+
+### Verify
+
+From the Lightsail host (or any machine that can reach the Postgres port; in v1 only the host itself can):
+
+```powershell
+# Connectivity + identity check.
+psql "host=localhost port=5432 dbname=github_sync user=github_sync password=<the-password>" `
+  -c "select current_user, current_database();"
+
+# Table-create + schema-create probes; confirms the role has the rights
+# EF Core migrations and Hangfire bootstrap will need.
+psql "host=localhost port=5432 dbname=github_sync user=github_sync password=<the-password>" `
+  -c "create table _probe (id int); drop table _probe; create schema _probe; drop schema _probe;"
+```
+
+Both commands should succeed without permission errors. The Initial migration is already in `main`, so a full schema smoke test is:
+
+```powershell
+$env:ConnectionStrings__AppDb = "Host=localhost;Port=5432;Database=github_sync;Username=github_sync;Password=<the-password>"
+dotnet ef database update --project src/GithubSync.Data --startup-project src/GithubSync.Api
+```
+
+Expected: `Done.` and the 8 app tables present under `psql ... -c "\dt"`.
+
+### Network exposure
+
+Postgres listens on `localhost` only — the Lightsail instance's network firewall does **not** open `5432` to the public internet, and there is no reason to. The API reaches Postgres over loopback inside the box; everything else stays out.
 
 ## Placeholder content
 
