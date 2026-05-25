@@ -21,6 +21,43 @@ public class LoggingWiringTests
         Assert.Equal("\"github-sync\"", captured.Properties["ApplicationName"].ToString());
     }
 
+    [Fact]
+    public void ApplyEnrichers_attaches_Environment_property_from_host()
+    {
+        var (logger, sink) = BuildTestLogger(Environments.Production);
+
+        logger.LogInformation("any");
+
+        var captured = Assert.Single(sink.Events);
+        Assert.Equal("\"Production\"", captured.Properties["Environment"].ToString());
+    }
+
+    [Fact]
+    public void ApplyEnrichers_attaches_Release_property_non_empty()
+    {
+        var (logger, sink) = BuildTestLogger(Environments.Production);
+
+        logger.LogInformation("any");
+
+        var captured = Assert.Single(sink.Events);
+        var release = captured.Properties["Release"].ToString();
+        Assert.False(string.IsNullOrWhiteSpace(release));
+        Assert.NotEqual("\"\"", release);
+    }
+
+    [Fact]
+    public void ApplyEnrichers_attaches_MachineName_property_non_empty()
+    {
+        var (logger, sink) = BuildTestLogger(Environments.Production);
+
+        logger.LogInformation("any");
+
+        var captured = Assert.Single(sink.Events);
+        var machineName = captured.Properties["MachineName"].ToString();
+        Assert.False(string.IsNullOrWhiteSpace(machineName));
+        Assert.NotEqual("\"\"", machineName);
+    }
+
     internal static (ILogger<LoggingWiringTests> logger, CapturingSink sink) BuildTestLogger(string envName)
     {
         var env = new TestHostEnvironment(envName);

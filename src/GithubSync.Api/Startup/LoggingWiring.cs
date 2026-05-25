@@ -9,6 +9,10 @@ public static class LoggingWiring
 
     internal static void ApplyEnrichers(LoggerConfiguration configuration, IHostEnvironment environment)
     {
-        configuration.Enrich.WithProperty("ApplicationName", ApplicationNameProperty);
+        configuration
+            .Enrich.WithProperty("ApplicationName", ApplicationNameProperty)
+            .Enrich.WithProperty("Environment", environment.EnvironmentName)
+            .Enrich.WithProperty("Release", ReleaseStamp.Current)
+            .Enrich.WithMachineName();
     }
 }
