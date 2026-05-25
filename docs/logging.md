@@ -54,7 +54,7 @@ ASP.NET Core's IIS `stdoutLog` is intentionally disabled — `Serilog.Sinks.File
 - `rollingInterval: Day` — a new file at midnight, named `app-yyyyMMdd.log`.
 - `fileSizeLimitBytes: 1 GB` + `rollOnFileSizeLimit: true` — within a single day, a runaway logger creates suffix files (`app-yyyyMMdd_001.log`, `_002.log`, ...) rather than dropping events.
 - `retainedFileCountLimit: 14` — older files are automatically deleted. Worst-case disk footprint ≈ 14 GB if every day hit the size cap (in practice, daily volume is in the MB).
-- `shared: true` — coordinates the file handle across briefly-coexisting worker processes, e.g., during an IIS overlapped recycle. (We also disable overlapped recycle at the IIS level — see [deploy.md → App pool settings](deploy.md#app-pool-settings) — but `shared: true` is the right default regardless.)
+- `shared: true` — coordinates the file handle across briefly-coexisting worker processes, e.g., during an IIS overlapped recycle. (Disabling overlapped recycle at the IIS level is also planned — see [deploy.md → App pool settings](deploy.md#app-pool-settings) and tracking issue [#55](https://github.com/BluePhoenix91/github-sync/issues/55) — but `shared: true` is the right default regardless.)
 
 ## Grep recipe
 
