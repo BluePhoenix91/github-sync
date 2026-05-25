@@ -58,6 +58,21 @@ public class LoggingWiringTests
         Assert.NotEqual("\"\"", machineName);
     }
 
+    [Fact]
+    public void Named_placeholder_template_produces_discrete_top_level_properties()
+    {
+        var (logger, sink) = BuildTestLogger(Environments.Production);
+
+        logger.LogWarning(
+            "Skipped {Source} item {ExternalId}: {Reason}",
+            "github", "issue-123", "rate-limited");
+
+        var captured = Assert.Single(sink.Events);
+        Assert.Equal("\"github\"", captured.Properties["Source"].ToString());
+        Assert.Equal("\"issue-123\"", captured.Properties["ExternalId"].ToString());
+        Assert.Equal("\"rate-limited\"", captured.Properties["Reason"].ToString());
+    }
+
     internal static (ILogger<LoggingWiringTests> logger, CapturingSink sink) BuildTestLogger(string envName)
     {
         var env = new TestHostEnvironment(envName);
