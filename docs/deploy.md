@@ -273,7 +273,7 @@ The runtime contract is enforced by [`RequiredSecrets.Validate`](../src/GithubSy
 
 | Purpose | App-pool env var (runtime) | GitHub Actions secret (build-time) | Used by |
 |---|---|---|---|
-| Sentry DSN | `SENTRY_DSN` | `SENTRY_DSN` | Sentry SDK (future) |
+| Sentry DSN | `SENTRY_DSN` | `SENTRY_DSN` | [`SentryWiring.Configure`](../src/GithubSync.Api/Startup/SentryWiring.cs) (see [Sentry](#sentry) below) |
 | GitHub PAT for fetch client | `GITHUB_TOKEN` | `GH_API_TOKEN` | Issue [#11](https://github.com/BluePhoenix91/github-sync/issues/11) (GitHub fetch) |
 | Azure DevOps PAT | `ADO_PAT` | `ADO_PAT` | Issues [#14](https://github.com/BluePhoenix91/github-sync/issues/14) / [#15](https://github.com/BluePhoenix91/github-sync/issues/15) (ADO exporter) |
 | Postgres connection string | `ConnectionStrings__AppDb` | `APP_DB_CONNECTION_STRING` | `AppDbContext` (today), Hangfire storage (future) |
@@ -300,6 +300,23 @@ The previous value is not retained on the host once the step runs — there is n
 ### Adding a fifth secret later
 
 If the inventory grows, **revisit AWS Systems Manager Parameter Store** as a vault in front of GitHub Actions — this was the explicit deferred trigger captured on epic [#25](https://github.com/BluePhoenix91/github-sync/issues/25). Until then, GitHub Actions repo secrets are sufficient for four values that change at human-scale frequency.
+
+## Sentry
+
+The API wires [Sentry.AspNetCore](https://docs.sentry.io/platforms/dotnet/guides/aspnetcore/) in [`SentryWiring.Configure`](../src/GithubSync.Api/Startup/SentryWiring.cs), called from [`Program.cs`](../src/GithubSync.Api/Program.cs) before the host builds. The SDK captures unhandled exceptions from request pipelines automatically.
+
+| Sentry option | Source | Value at runtime |
+|---|---|---|
+| `Dsn` | `SENTRY_DSN` env var on the app pool | The DSN from the GitHub Actions secret of the same name. |
+| `Environment` | `IHostEnvironment.EnvironmentName` | `Production` on the host (matches the system-wide `ASPNETCORE_ENVIRONMENT`). |
+| `Release` | Sentry SDK default: entry assembly's `AssemblyInformationalVersion` | Stamped by CD as `<assembly-version>+<git-sha>` via MSBuild's `SourceRevisionId` parameter on `dotnet publish`. |
+| `SendDefaultPii` | SDK default | `false` — no request body, header, or user capture. |
+
+If `SENTRY_DSN` is unset, `SentryWiring.Configure` skips initialization entirely (the SDK is never registered, no events queue). Production cannot reach this branch — `RequiredSecrets.Validate` throws on missing `SENTRY_DSN` before the worker starts. The branch exists for `Development` and tests, where running offline without a DSN is the common case.
+
+### Verifying events land
+
+The repo does not ship a debug-throw route. Live verification happens against the first real exception after deploy: trigger one (or wait for one), then in Sentry confirm the event carries `environment=Production` and a `release` tag of the form `<version>+<sha>` matching the deployed commit.
 
 ## HTTPS / certificate
 

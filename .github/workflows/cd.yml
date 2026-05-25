@@ -38,8 +38,11 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      # SourceRevisionId stamps the commit SHA into AssemblyInformationalVersion at compile
+      # time. Sentry reads that attribute as the Release tag for events, so errors are
+      # traceable back to the exact deployed commit.
       - name: Publish
-        run: dotnet publish src/GithubSync.Api/GithubSync.Api.csproj -c Release -r win-x64 --self-contained false -o publish
+        run: dotnet publish src/GithubSync.Api/GithubSync.Api.csproj -c Release -r win-x64 --self-contained false -p:SourceRevisionId=${{ github.sha }} -o publish
 
       - name: Stop app pool
         shell: powershell
