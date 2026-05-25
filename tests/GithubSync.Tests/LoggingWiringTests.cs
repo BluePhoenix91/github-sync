@@ -12,52 +12,32 @@ namespace GithubSync.Tests;
 
 public class LoggingWiringTests
 {
-    [Fact]
-    public void ApplyEnrichers_attaches_ApplicationName_property()
-    {
-        var (logger, sink) = BuildTestLogger(Environments.Production);
-
-        logger.LogWarning("any message");
-
-        var captured = Assert.Single(sink.Events);
-        Assert.Equal("\"github-sync\"", captured.Properties["ApplicationName"].ToString());
-    }
-
-    [Fact]
-    public void ApplyEnrichers_attaches_Environment_property_from_host()
+    [Theory]
+    [InlineData(LoggingWiring.ApplicationNameKey, "\"github-sync\"")]
+    [InlineData(LoggingWiring.EnvironmentKey, "\"Production\"")]
+    public void ApplyEnrichers_attaches_constant_property(string propertyName, string expectedToString)
     {
         var (logger, sink) = BuildTestLogger(Environments.Production);
 
         logger.LogInformation("any");
 
         var captured = Assert.Single(sink.Events);
-        Assert.Equal("\"Production\"", captured.Properties["Environment"].ToString());
+        Assert.Equal(expectedToString, captured.Properties[propertyName].ToString());
     }
 
-    [Fact]
-    public void ApplyEnrichers_attaches_Release_property_non_empty()
+    [Theory]
+    [InlineData(LoggingWiring.ReleaseKey)]
+    [InlineData(LoggingWiring.MachineNameKey)]
+    public void ApplyEnrichers_attaches_machine_derived_property_non_empty(string propertyName)
     {
         var (logger, sink) = BuildTestLogger(Environments.Production);
 
         logger.LogInformation("any");
 
         var captured = Assert.Single(sink.Events);
-        var release = captured.Properties["Release"].ToString();
-        Assert.False(string.IsNullOrWhiteSpace(release));
-        Assert.NotEqual("\"\"", release);
-    }
-
-    [Fact]
-    public void ApplyEnrichers_attaches_MachineName_property_non_empty()
-    {
-        var (logger, sink) = BuildTestLogger(Environments.Production);
-
-        logger.LogInformation("any");
-
-        var captured = Assert.Single(sink.Events);
-        var machineName = captured.Properties["MachineName"].ToString();
-        Assert.False(string.IsNullOrWhiteSpace(machineName));
-        Assert.NotEqual("\"\"", machineName);
+        var rendered = captured.Properties[propertyName].ToString();
+        Assert.False(string.IsNullOrWhiteSpace(rendered));
+        Assert.NotEqual("\"\"", rendered);
     }
 
     [Fact]
@@ -119,13 +99,5 @@ public class LoggingWiringTests
     {
         public List<LogEvent> Events { get; } = new();
         public void Emit(LogEvent logEvent) => Events.Add(logEvent);
-    }
-
-    internal sealed class TestHostEnvironment(string envName) : IHostEnvironment
-    {
-        public string EnvironmentName { get; set; } = envName;
-        public string ApplicationName { get; set; } = "tests";
-        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
-        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 }

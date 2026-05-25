@@ -4,9 +4,7 @@ namespace GithubSync.Api.Startup;
 
 internal static class ReleaseStamp
 {
-    private static readonly Lazy<string> Cached = new(Resolve);
-
-    public static string Current => Cached.Value;
+    public static readonly string Current = Resolve();
 
     private static string Resolve()
     {

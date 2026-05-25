@@ -7,7 +7,11 @@ namespace GithubSync.Api.Startup;
 
 public static class LoggingWiring
 {
-    internal const string ApplicationNameProperty = "github-sync";
+    internal const string ApplicationNameValue = "github-sync";
+    internal const string ApplicationNameKey = "ApplicationName";
+    internal const string EnvironmentKey = "Environment";
+    internal const string ReleaseKey = "Release";
+    internal const string MachineNameKey = "MachineName";
 
     public static void Configure(WebApplicationBuilder builder)
     {
@@ -22,9 +26,9 @@ public static class LoggingWiring
     internal static void ApplyEnrichers(LoggerConfiguration configuration, IHostEnvironment environment)
     {
         configuration
-            .Enrich.WithProperty("ApplicationName", ApplicationNameProperty)
-            .Enrich.WithProperty("Environment", environment.EnvironmentName)
-            .Enrich.WithProperty("Release", ReleaseStamp.Current)
+            .Enrich.WithProperty(ApplicationNameKey, ApplicationNameValue)
+            .Enrich.WithProperty(EnvironmentKey, environment.EnvironmentName)
+            .Enrich.WithProperty(ReleaseKey, ReleaseStamp.Current)
             .Enrich.WithMachineName();
     }
 
