@@ -72,6 +72,37 @@ jobs:
           New-Item -ItemType Directory -Path $env:SITE_PATH -Force | Out-Null
           Copy-Item -Path "publish\*" -Destination $env:SITE_PATH -Recurse -Force
 
+      # Re-applies every deploy so a rotated secret takes effect on the next merge
+      # to main without anyone touching the host. The app reads these via
+      # IConfiguration; the validator in Program.cs fails the worker if any are missing.
+      - name: Configure app pool environment variables
+        shell: powershell
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GH_API_TOKEN: ${{ secrets.GH_API_TOKEN }}
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+          APP_DB_CONNECTION_STRING: ${{ secrets.APP_DB_CONNECTION_STRING }}
+        run: |
+          $filter = "system.applicationHost/applicationPools/add[@name='$env:APP_POOL']/environmentVariables"
+
+          $entries = @(
+            @{ Name = 'SENTRY_DSN';                Value = $env:SENTRY_DSN }
+            @{ Name = 'GITHUB_TOKEN';              Value = $env:GH_API_TOKEN }
+            @{ Name = 'ADO_PAT';                   Value = $env:ADO_PAT }
+            @{ Name = 'ConnectionStrings__AppDb';  Value = $env:APP_DB_CONNECTION_STRING }
+          )
+
+          $missing = $entries | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object { $_.Name }
+          if ($missing) {
+            throw "Missing GitHub Actions secrets for: $($missing -join ', '). Configure them in Settings -> Secrets and variables -> Actions."
+          }
+
+          Clear-WebConfiguration -pspath 'MACHINE/WEBROOT/APPHOST' -filter $filter
+          foreach ($e in $entries) {
+            Add-WebConfigurationProperty -pspath 'MACHINE/WEBROOT/APPHOST' -filter $filter `
+              -name '.' -value @{ name = $e.Name; value = $e.Value }
+          }
+
       - name: Start app pool
         if: always()
         shell: powershell

@@ -8,11 +8,11 @@ What's covered:
 
 - IIS site, app pool, bindings, and environment configuration on the Lightsail host ([#31](https://github.com/BluePhoenix91/github-sync/issues/31)).
 - Database and role provisioning on the colocated Postgres instance ([#33](https://github.com/BluePhoenix91/github-sync/issues/33)).
+- Secrets wiring — Sentry DSN, GitHub PAT, ADO PAT, DB connection string ([#35](https://github.com/BluePhoenix91/github-sync/issues/35)).
 - HTTPS topology and cert source.
 
 What is **not** covered yet — separate child issues under [#29](https://github.com/BluePhoenix91/github-sync/issues/29) will fill these in:
 
-- Secrets wiring (Sentry DSN, GitHub PAT, ADO PAT, DB connection string).
 - Hangfire dashboard auth filter, recurring job registration, keep-alive strategy.
 
 CI lives in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (build + test on PR and on push to `main`). CD is described below.
@@ -74,7 +74,7 @@ If memory pressure ever becomes a real problem on this box, "Private Memory Limi
 
 - **`ASPNETCORE_ENVIRONMENT=Production`** — set as a **system-wide** environment variable on the host. The host serves this single environment, so per-pool scoping isn't needed and the existing setting is left in place.
 - **`ASPNETCORE_URLS`** — **not set anywhere**. Under the IIS in-process ANCM hosting model, IIS hands the port to Kestrel via internal environment variables (`ASPNETCORE_PORT`, `ASPNETCORE_TOKEN`). Setting `ASPNETCORE_URLS` would compete with that and is a known source of misconfiguration. Resist the urge to add it "just in case".
-- **App-pool-scoped environment variables**: none in this PR. The future secrets-wiring child issue under [#29](https://github.com/BluePhoenix91/github-sync/issues/29) introduces these for things like `Sentry__Dsn`, `ConnectionStrings__AppDb`, etc.
+- **App-pool-scoped environment variables**: wired by the CD workflow on every deploy from GitHub Actions secrets — see [Secrets](#secrets) below.
 
 ## Database
 
@@ -231,7 +231,8 @@ A fresh remove-token is generated from the same Settings → Runners page.
 3. Stop the `github-sync-api` app pool and wait up to 30 seconds for the worker to exit. The stop is what releases file locks on the running binaries; a recycle alone would not.
 4. Rotate the previous publish folder to a timestamped sibling backup: `C:\Azureflow-QA\GithubSync.API` → `C:\Azureflow-QA\GithubSync.API.backup-<yyyyMMdd-HHmmss>`. Any older `GithubSync.API.backup-*` is removed first, so exactly **one** backup is kept on disk at a time.
 5. Copy the publish output into `C:\Azureflow-QA\GithubSync.API`.
-6. Start the app pool. This step runs even if an earlier step failed (`if: always()`) — leaving the pool stopped on a failed deploy would dark the site for as long as it takes someone to notice.
+6. Re-apply the app pool's environment variables from the four GitHub Actions secrets (see [Secrets](#secrets) below). The step fails the deploy if any secret is empty, before the worker would otherwise start with a blank value.
+7. Start the app pool. This step runs even if an earlier step failed (`if: always()`) — leaving the pool stopped on a failed deploy would dark the site for as long as it takes someone to notice.
 
 `concurrency: { group: cd, cancel-in-progress: false }` so a second merge that lands mid-deploy queues behind the first rather than cancelling it half-way through a stop/copy/start.
 
@@ -258,7 +259,47 @@ Only the most recent backup is preserved, so the rollback window covers the **im
 - **Build or publish fails**: workflow stops before touching the host. No state change.
 - **Stop-pool timeout** (worker process won't exit within 30s): workflow fails red and stops. The site keeps serving the previous version. Investigate the worker on the host (`Get-Process w3wp`).
 - **Copy fails mid-way**: the workflow still starts the pool, so the site comes up against partial files and will likely return errors. Use the manual rollback above.
+- **Missing GitHub Actions secret**: the "Configure app pool environment variables" step throws before any IIS config changes, naming each missing secret. Configure the secret in **Settings → Secrets and variables → Actions** and re-run.
+- **App fails to start with "Missing required secrets"**: the runtime validator (`RequiredSecrets.Validate`) ran and found one or more secrets unset on the app pool. The worker logs the missing list before exiting. Confirm the GitHub Actions secrets exist and re-run CD; the deploy step writes them onto the pool fresh on every run.
 - **Start-pool fails**: requires manual intervention via IIS Manager. Site is down until resolved.
+
+## Secrets
+
+Four secrets are required at runtime. All live on the `github-sync-api` IIS app pool as environment variables and are read by the API via `IConfiguration`. The CD workflow writes them on every deploy from GitHub Actions repository secrets — they are never committed to the repo and never written to disk in `appsettings*.json`.
+
+The runtime contract is enforced by [`RequiredSecrets.Validate`](../src/GithubSync.Api/Startup/RequiredSecrets.cs), called from [`Program.cs`](../src/GithubSync.Api/Program.cs) after the host builds. In `Production` (and any environment that isn't `Development`), a missing secret throws at startup and the worker exits — no silent empty-string fallback. In `Development`, missing secrets log a warning but do not block startup, so a developer working on an unrelated slice isn't forced to provision credentials they don't need yet.
+
+### Inventory
+
+| Purpose | App-pool env var (runtime) | GitHub Actions secret (build-time) | Used by |
+|---|---|---|---|
+| Sentry DSN | `SENTRY_DSN` | `SENTRY_DSN` | Sentry SDK (future) |
+| GitHub PAT for fetch client | `GITHUB_TOKEN` | `GH_API_TOKEN` | Issue [#11](https://github.com/BluePhoenix91/github-sync/issues/11) (GitHub fetch) |
+| Azure DevOps PAT | `ADO_PAT` | `ADO_PAT` | Issues [#14](https://github.com/BluePhoenix91/github-sync/issues/14) / [#15](https://github.com/BluePhoenix91/github-sync/issues/15) (ADO exporter) |
+| Postgres connection string | `ConnectionStrings__AppDb` | `APP_DB_CONNECTION_STRING` | `AppDbContext` (today), Hangfire storage (future) |
+
+The GitHub Actions secret name for the GitHub PAT is `GH_API_TOKEN` rather than `GITHUB_TOKEN` because GitHub Actions reserves the `GITHUB_*` prefix for repository-scoped secrets and rejects user-defined names that start with it. The runtime app-pool env var is still `GITHUB_TOKEN` because that's the standard name the GitHub client libraries read.
+
+The connection string is kept under the `AppDb` key (not the issue's draft suggestion `GithubSync`) because the codebase, `Program.cs` reader, and `dotnet user-secrets` instructions in `CLAUDE.md` were already aligned on `AppDb`. Renaming would have churned all three for no behavioural gain.
+
+### Local development
+
+In `Development` the same four config keys are read, but the source is [`dotnet user-secrets`](https://learn.microsoft.com/aspnet/core/security/app-secrets) (the API project has a `UserSecretsId`). Only `ConnectionStrings:AppDb` is required to do anything useful locally; the other three can be left unset and the startup warning is tolerated. The connection-string one-liner is in `CLAUDE.md` under **Commands**.
+
+### Rotation
+
+The same procedure applies to all four secrets:
+
+1. Generate or obtain the new value (regenerate the PAT in GitHub / ADO, regenerate the DSN in Sentry, or change the Postgres role password and rewrite the connection string).
+2. Update the corresponding GitHub Actions secret: **Settings → Secrets and variables → Actions → Repository secrets** → edit the value. The secret name does not change.
+3. Trigger the CD workflow — either land a merge to `main`, or use **Actions → CD → Run workflow** on `main`. The "Configure app pool environment variables" step clears and re-adds the entire `environmentVariables` collection on the app pool with the fresh value before starting the pool.
+4. Verify by checking the next worker process picks it up. For the connection string, a missing or wrong value surfaces immediately as an EF/Npgsql connection error in logs.
+
+The previous value is not retained on the host once the step runs — there is no manual file under `C:\Azureflow-QA\` to also clear, and `Clear-WebConfiguration` removes the old entry before `Add-WebConfigurationProperty` writes the new one.
+
+### Adding a fifth secret later
+
+If the inventory grows, **revisit AWS Systems Manager Parameter Store** as a vault in front of GitHub Actions — this was the explicit deferred trigger captured on epic [#25](https://github.com/BluePhoenix91/github-sync/issues/25). Until then, GitHub Actions repo secrets are sufficient for four values that change at human-scale frequency.
 
 ## HTTPS / certificate
 
@@ -274,7 +315,6 @@ If a renewal ever fails, start the investigation in `C:\ProgramData\win-acme\` o
 For future child issues under [#29](https://github.com/BluePhoenix91/github-sync/issues/29):
 
 - **Hangfire keep-alive**: prior Hangfire-bearing services on this host have needed an external health-ping to stay alive despite the disabled idle timeout. Revisit during the future Hangfire epic; if the failure mode recurs, capture it (logs, recycle events) so the next mitigation is informed rather than copied.
-- **Secrets**: when the secrets-wiring PR lands, secrets go onto the `github-sync-api` app pool's environment variables at deploy time — not into `appsettings.Production.json` on disk. This was settled on [#25](https://github.com/BluePhoenix91/github-sync/issues/25). This document gains a section then.
 - **DNS configuration**: the current records are inherited from a sibling site rather than designed for github-sync; normalising to a simpler configuration is a candidate cleanup.
 - **Origin lockdown**: if Cloudflare ever becomes the *only* intended path to the box, the firewall can be tightened to accept HTTPS only from Cloudflare's published IP ranges. Out of scope until that becomes a real requirement.
 - **HTTPS redirect**: HTTP `:80` is not redirected to `:443` at the IIS level; add this once the API starts serving anything sensitive, or move to HSTS at the same time.
