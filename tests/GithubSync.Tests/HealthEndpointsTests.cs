@@ -3,12 +3,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using GithubSync.Api.Startup;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Hosting;
 
 namespace GithubSync.Tests;
 
@@ -113,25 +110,8 @@ public class HealthEndpointsTests
     private sealed record HealthPayload(string Status, long TotalDurationMs, List<HealthCheckPayload> Checks);
     private sealed record HealthCheckPayload(string Name, string Status, long DurationMs);
 
-    private sealed class HealthFactory(HealthStatus dbStatus) : WebApplicationFactory<Program>
+    private sealed class HealthFactory(HealthStatus dbStatus) : ConfiguredAppFactory
     {
-        protected override IHost CreateHost(IHostBuilder builder)
-        {
-            // AppDb registration requires a parseable connection string; the real check is swapped below.
-            builder.UseEnvironment(Environments.Development);
-            builder.ConfigureHostConfiguration(config =>
-            {
-                config.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["ConnectionStrings:AppDb"] = "Host=placeholder;Database=placeholder;Username=placeholder;Password=placeholder",
-                    // Keep the test host off prod Sentry: the unhealthy /health/ready response below
-                    // is by-design and logs at Error, which the SDK would otherwise ship as an event.
-                    [SentryWiring.DsnConfigKey] = "",
-                });
-            });
-            return base.CreateHost(builder);
-        }
-
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.ConfigureTestServices(services =>

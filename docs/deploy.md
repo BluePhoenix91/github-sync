@@ -67,6 +67,7 @@ Open the app pool in IIS Manager → Advanced Settings:
 - **Idle Time-out (minutes)**: `0`. The default of 20 minutes silently suspends the worker process when no requests arrive — which would kill background jobs once Hangfire lands. Setting it to `0` keeps the worker alive indefinitely.
 - **Regular Time Interval (minutes)** (under "Recycling"): `0`. The default of 1740 minutes (~29 hours) causes the worker to recycle at drifting times of day. Disabling it removes that variability; the process runs until deploy or reboot.
 - **Specific Times** (under "Recycling"): leave empty. No fixed-time recycle in v1.
+- **Disable Overlapped Recycle** (under "Recycling"): `True`. Default IIS behaviour keeps two worker processes briefly alive across a recycle, which complicates reasoning about file locks (relevant once the Serilog file sink lands — see [docs/logging.md](logging.md)). Our deploy CD does a hard `Stop-WebAppPool` / `Start-WebAppPool` rather than an overlapped recycle, but an operator-initiated recycle from IIS Manager would default to overlapping. Tracking host-side flip under [#55](https://github.com/BluePhoenix91/github-sync/issues/55).
 
 If memory pressure ever becomes a real problem on this box, "Private Memory Limit" is the lever to reach for — not the periodic recycle.
 
@@ -317,6 +318,17 @@ If `SENTRY_DSN` is unset, `SentryWiring.Configure` skips initialization entirely
 ### Verifying events land
 
 The repo does not ship a debug-throw route. Live verification happens against the first real exception after deploy: trigger one (or wait for one), then in Sentry confirm the event carries `environment=Production` and a `release` tag of the form `<version>+<sha>` matching the deployed commit.
+
+## Logging
+
+Structured logging conventions, field shape, and the grep recipe live in [docs/logging.md](logging.md). This section captures the host-side specifics.
+
+- **Where logs land on disk:** `C:\Azureflow-QA\GithubSync.API\logs\app-yyyyMMdd.log`, one JSON line per event. Suffix files (`app-yyyyMMdd_001.log`, ...) appear if a single day hits the 1 GB per-file cap.
+- **Retention:** 14 files kept, older files deleted automatically by `Serilog.Sinks.File`.
+- **No setup needed on the host.** The `logs/` subdirectory is created on first write. `ApplicationPoolIdentity` already owns the parent `C:\Azureflow-QA\GithubSync.API\` directory under the existing deploy convention, so child directories inherit write access without an explicit ACL grant.
+- **ANCM `stdoutLog` is intentionally disabled** (the IIS default). The app's Serilog file sink owns the rolling/retention story. `RequiredSecrets.Validate` covers misconfigured-secret startup failures with a clear thrown message, and any later startup exception goes through `Sentry.AspNetCore`. Leaving ANCM stdout off avoids a second uncapped log stream.
+
+If logs stop appearing on disk: check Sentry for events first — the Serilog Sentry sink is independent of the file sink, so Sentry being silent too narrows the cause to the app itself rather than the file system.
 
 ## HTTPS / certificate
 

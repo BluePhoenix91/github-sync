@@ -92,14 +92,5 @@ public class RequiredSecretsTests
     private static IConfiguration BuildConfig(Dictionary<string, string?> values) =>
         new ConfigurationBuilder().AddInMemoryCollection(values).Build();
 
-    private static IHostEnvironment Env(string name) => new TestEnv(name);
-
-    private sealed class TestEnv : IHostEnvironment
-    {
-        public TestEnv(string environmentName) => EnvironmentName = environmentName;
-        public string EnvironmentName { get; set; }
-        public string ApplicationName { get; set; } = "tests";
-        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
-        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
-    }
+    private static IHostEnvironment Env(string name) => new TestHostEnvironment(name);
 }
