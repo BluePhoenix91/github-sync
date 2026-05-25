@@ -90,6 +90,44 @@ If the `C:\Azureflow-QA\GithubSync.API\logs\` directory becomes unwritable (full
 
 Check Sentry first if you notice missing file-side log lines; if Sentry is also empty, check the host's disk and ACLs on `logs/`.
 
+## Per-run sync metrics
+
+Per CLAUDE.md, *expected* per-row occurrences during sync — most importantly dedup hits — stay silent at the row level. The single observable that exposes them in production is an end-of-run aggregate, emitted once per sync run (success or failure).
+
+The aggregate lives in [`SyncRunMetrics`](../src/GithubSync.Api/Sync/SyncRunMetrics.cs); end-of-run emission is owned by [`SyncRunMetricsEmitter.Emit`](../src/GithubSync.Api/Sync/SyncRunMetricsEmitter.cs).
+
+| Field | What it counts |
+|---|---|
+| `RunId` | GUID assigned at run construction. Groups every log line from one run after the fact. |
+| `Source` | Source system the run pulled from. v1 only ships `GitHub`; v2 multi-source uses this to separate runs. Serialised from [`GithubSync.Data.Enums.Source`](../src/GithubSync.Data/Enums/Source.cs). |
+| `Fetched` | Items returned by the fetch client ([#11](https://github.com/BluePhoenix91/github-sync/issues/11)). |
+| `Mapped` | Items successfully transformed by the mapper ([#12](https://github.com/BluePhoenix91/github-sync/issues/12)). |
+| `Persisted` | Net new canonical events written. Excludes dedup hits. |
+| `Deduped` | Items dropped because the idempotency key ([#8](https://github.com/BluePhoenix91/github-sync/issues/8)) collided. By-design behaviour during overlapping fetch windows and webhook + poll double-coverage; row-level logs would just be noise. |
+| `Skipped` | Skip-and-log occurrences — unexpected non-blocking failures (malformed payload, unparseable value). Each row also emits a `Warning` with `{ Source, ExternalId, Reason }`. |
+| `Failed` | Systemic failures that aborted the run (auth, connectivity, persistent schema mismatch). Typically `0`; `1` on a hard abort. |
+| `DurationMs` | Wall time from `SyncRunMetrics` construction to `Complete()`. |
+
+### Output
+
+End-of-run emission writes one record per run with all fields above as discrete top-level properties (named-placeholder convention, same as the rest of the file). To query a single run's logs:
+
+```powershell
+Select-String -Path 'C:\Azureflow-QA\GithubSync.API\logs\app-*.log' -Pattern '"RunId":"<guid>"'
+```
+
+To find runs where dedup activity was non-zero:
+
+```powershell
+Select-String -Path 'C:\Azureflow-QA\GithubSync.API\logs\app-*.log' -Pattern '"Deduped":[1-9]'
+```
+
+### Sentry surface
+
+The same aggregate is captured as a Sentry **message at `Info` level** (not a transaction). Each metric ships as a tag/extra so the Sentry UI can group by `sync.source` / `sync.run_id` and chart the counts.
+
+**Decision: message + tags, not a Sentry transaction.** v1 has no tracing/performance pipeline wired up, so transactions would cost setup without giving dashboards anything they don't already get from tagged messages. Reconsider once Hangfire enqueues add upstream context (parent epic [#30](https://github.com/BluePhoenix91/github-sync/issues/30) — the metrics library question is deliberately deferred until v1 has a place to ship metrics to).
+
 ## Follow-ups
 
 - [#53](https://github.com/BluePhoenix91/github-sync/issues/53) — evaluate Seq self-hosted as a real log aggregator.
