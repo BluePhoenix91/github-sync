@@ -124,6 +124,9 @@ public class HealthEndpointsTests
                 config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["ConnectionStrings:AppDb"] = "Host=placeholder;Database=placeholder;Username=placeholder;Password=placeholder",
+                    // Keep the test host off prod Sentry: the unhealthy /health/ready response below
+                    // is by-design and logs at Error, which the SDK would otherwise ship as an event.
+                    [SentryWiring.DsnConfigKey] = "",
                 });
             });
             return base.CreateHost(builder);
