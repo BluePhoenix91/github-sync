@@ -1,3 +1,4 @@
+using System.Text.Json;
 using GithubSync.Api.Startup;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -5,6 +6,7 @@ using Serilog;
 using Serilog.Core;
 using Serilog.Events;
 using Serilog.Extensions.Logging;
+using Serilog.Formatting.Compact;
 
 namespace GithubSync.Tests;
 
@@ -71,6 +73,33 @@ public class LoggingWiringTests
         Assert.Equal("\"github\"", captured.Properties["Source"].ToString());
         Assert.Equal("\"issue-123\"", captured.Properties["ExternalId"].ToString());
         Assert.Equal("\"rate-limited\"", captured.Properties["Reason"].ToString());
+    }
+
+    [Fact]
+    public void CompactJsonFormatter_renders_all_seven_property_names_as_top_level_keys()
+    {
+        var (logger, sink) = BuildTestLogger(Environments.Production);
+
+        logger.LogWarning(
+            "Skipped {Source} item {ExternalId}: {Reason}",
+            "github", "issue-123", "rate-limited");
+
+        var captured = Assert.Single(sink.Events);
+
+        var formatter = new CompactJsonFormatter();
+        var writer = new StringWriter();
+        formatter.Format(captured, writer);
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var root = doc.RootElement;
+
+        Assert.True(root.TryGetProperty("ApplicationName", out _), "ApplicationName missing");
+        Assert.True(root.TryGetProperty("Environment", out _), "Environment missing");
+        Assert.True(root.TryGetProperty("Release", out _), "Release missing");
+        Assert.True(root.TryGetProperty("MachineName", out _), "MachineName missing");
+        Assert.True(root.TryGetProperty("Source", out var source) && source.GetString() == "github", "Source missing or wrong");
+        Assert.True(root.TryGetProperty("ExternalId", out var extId) && extId.GetString() == "issue-123", "ExternalId missing or wrong");
+        Assert.True(root.TryGetProperty("Reason", out var reason) && reason.GetString() == "rate-limited", "Reason missing or wrong");
     }
 
     internal static (ILogger<LoggingWiringTests> logger, CapturingSink sink) BuildTestLogger(string envName)
