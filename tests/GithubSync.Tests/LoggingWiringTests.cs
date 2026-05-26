@@ -94,10 +94,4 @@ public class LoggingWiringTests
         var factory = new SerilogLoggerFactory(serilog.CreateLogger(), dispose: true);
         return (factory.CreateLogger<LoggingWiringTests>(), sink);
     }
-
-    internal sealed class CapturingSink : ILogEventSink
-    {
-        public List<LogEvent> Events { get; } = new();
-        public void Emit(LogEvent logEvent) => Events.Add(logEvent);
-    }
 }
