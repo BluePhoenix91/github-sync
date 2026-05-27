@@ -82,6 +82,16 @@ public class LoggingWiringTests
         Assert.True(root.TryGetProperty("Reason", out var reason) && reason.GetString() == "rate-limited", "Reason missing or wrong");
     }
 
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    [InlineData("http://localhost:5341", true)]
+    public void ShouldEnableSeq_requires_non_blank_url(string? url, bool expected)
+    {
+        Assert.Equal(expected, LoggingWiring.ShouldEnableSeq(url));
+    }
+
     internal static (ILogger<LoggingWiringTests> logger, CapturingSink sink) BuildTestLogger(string envName)
     {
         var env = new TestHostEnvironment(envName);

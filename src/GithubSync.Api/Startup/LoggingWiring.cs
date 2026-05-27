@@ -12,6 +12,7 @@ public static class LoggingWiring
     internal const string EnvironmentKey = "Environment";
     internal const string ReleaseKey = "Release";
     internal const string MachineNameKey = "MachineName";
+    public const string SeqServerUrlConfigKey = "SEQ_SERVER_URL";
 
     public static void Configure(WebApplicationBuilder builder)
     {
@@ -19,7 +20,7 @@ public static class LoggingWiring
         {
             configuration.ReadFrom.Configuration(context.Configuration);
             ApplyEnrichers(configuration, context.HostingEnvironment);
-            ApplyDestinations(configuration, context.HostingEnvironment);
+            ApplyDestinations(configuration, context.HostingEnvironment, context.Configuration[SeqServerUrlConfigKey]);
         });
     }
 
@@ -32,7 +33,7 @@ public static class LoggingWiring
             .Enrich.WithMachineName();
     }
 
-    internal static void ApplyDestinations(LoggerConfiguration configuration, IHostEnvironment environment)
+    internal static void ApplyDestinations(LoggerConfiguration configuration, IHostEnvironment environment, string? seqServerUrl = null)
     {
         if (environment.IsDevelopment())
         {
@@ -48,8 +49,15 @@ public static class LoggingWiring
                 fileSizeLimitBytes: 1L * 1024 * 1024 * 1024,
                 retainedFileCountLimit: 14,
                 shared: true);
+
+            if (ShouldEnableSeq(seqServerUrl))
+            {
+                configuration.WriteTo.Seq(seqServerUrl!);
+            }
         }
 
         configuration.WriteTo.Sentry(o => o.InitializeSdk = false);
     }
+
+    internal static bool ShouldEnableSeq(string? seqServerUrl) => !string.IsNullOrWhiteSpace(seqServerUrl);
 }

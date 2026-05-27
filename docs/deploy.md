@@ -330,6 +330,48 @@ Structured logging conventions, field shape, and the grep recipe live in [docs/l
 
 If logs stop appearing on disk: check Sentry for events first — the Serilog Sentry sink is independent of the file sink, so Sentry being silent too narrows the cause to the app itself rather than the file system.
 
+## Seq
+
+[Seq](https://datalust.co/seq) is an **opt-in** structured log aggregator that sits alongside the file sink on the Lightsail box. Conventions, query recipes, and the runtime wiring rationale live in [docs/logging.md → Seq](logging.md#seq); this section captures the host-side install and operate steps.
+
+### Install
+
+1. Download the Seq Windows installer (single-user free tier) from <https://datalust.co/download>.
+2. Run as administrator. Accept the default install path (`C:\Program Files\Seq`) and the default storage path (`C:\ProgramData\Seq`). The installer registers Seq as a Windows service set to start automatically.
+3. On first launch, open `http://localhost:5341` *on the host itself* (RDP or the SSH tunnel below). Seq prompts to set the admin password — store it in the operator password manager. No additional user accounts are needed; the free tier is single-user.
+
+### Network
+
+Seq listens on `http://localhost:5341` and is **not exposed publicly**. There is no IIS reverse-proxy rule, no Cloudflare hostname, no Cloudflare origin cert — `5341` stays closed at the Lightsail firewall and bound to loopback on the host. Operators reach the UI over an SSH tunnel:
+
+```bash
+ssh -L 5341:localhost:5341 <user>@<lightsail-host>
+# then browse http://localhost:5341 from the workstation
+```
+
+Trade-off recorded: an IIS reverse-proxy rule + win-acme cert would let operators bookmark a real URL, but it would add one more public surface to keep patched and certificate-renewed. The SSH tunnel reuses access controls that already exist for the box.
+
+### Wire the API to Seq
+
+1. Add a `SEQ_SERVER_URL` env var to the `github-sync-api` IIS app pool, value `http://localhost:5341`. The simplest path: extend the CD workflow's "Configure app pool environment variables" step to write `SEQ_SERVER_URL` alongside the four existing secrets (Seq URL is a deploy-time *config value*, not a secret — putting it in the same step keeps the env-var set in one place).
+2. Recycle the app pool (next deploy does this automatically).
+3. Verify in the Seq UI: a search like `ApplicationName = 'github-sync'` should show recent events within seconds of the next request hitting the API.
+
+`SEQ_SERVER_URL` is **not** added to `RequiredSecrets`. If it is unset, [`LoggingWiring`](../src/GithubSync.Api/Startup/LoggingWiring.cs) skips the Seq sink and the API logs to file + Sentry exactly as before — leaving the var off is a supported state, not a misconfiguration.
+
+### Retention
+
+Configure a **30-day retention policy** in the Seq UI under **Settings → Retention** (delete events older than 30 days). The free tier caps total stored event volume; 30 days is the planned ceiling. If volume ever pushes against the cap before 30 days, drop the policy to whatever fits — the file sink's 14-day window remains the recent-history fallback regardless.
+
+### Backup and upgrade
+
+Seq's data lives in `C:\ProgramData\Seq`. It is *not* part of the API deploy artifact and is not backed up by CD. If the box is rebuilt, Seq is a fresh install with no prior events — acceptable, since the file sink is the durable record. Upgrading Seq is a re-run of the installer; the data directory is preserved across upgrades.
+
+### Troubleshooting
+
+- **Seq UI loads but no `github-sync` events appear:** confirm `SEQ_SERVER_URL` is present on the `github-sync-api` app pool (`appcmd list apppool github-sync-api /text:*`) and the pool has been recycled since the env var was set.
+- **Sink errors in the API's log file:** `Serilog.Sinks.Seq` writes its own ingestion failures via Serilog's `SelfLog` (off by default). It buffers in memory if Seq is briefly down; sustained outages drop events at the sink — Sentry and the file sink are unaffected.
+
 ## HTTPS / certificate
 
 - **Edge cert** (seen by clients routed via Cloudflare): issued by Cloudflare automatically.
