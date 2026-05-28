@@ -40,7 +40,7 @@ public class GitHubRateLimitBudgetTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
-        await Assert.ThrowsAsync<TaskCanceledException>(
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
             async () => await budget.WaitIfLowAsync(cts.Token));
     }
 
