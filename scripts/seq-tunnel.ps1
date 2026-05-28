@@ -100,11 +100,20 @@ function Stop-Tunnel {
         return
     }
     $tunnelPid = Get-Content $pidFile | Select-Object -First 1
-    try {
-        Stop-Process -Id $tunnelPid -Force -ErrorAction Stop
-        Write-Host "Stopped tunnel (PID $tunnelPid)."
-    } catch {
-        Write-Warning "Could not stop PID $tunnelPid — already gone? ($_)"
+    # Guard against PID reuse: only kill if the process still looks like ssh.
+    # Otherwise a recycled PID could belong to an editor / shell / anything.
+    $proc = Get-Process -Id $tunnelPid -ErrorAction SilentlyContinue
+    if (-not $proc) {
+        Write-Host "PID $tunnelPid is no longer running — clearing PID file."
+    } elseif ($proc.ProcessName -ne 'ssh') {
+        Write-Warning "PID $tunnelPid is '$($proc.ProcessName)', not ssh — refusing to kill. Clearing stale PID file."
+    } else {
+        try {
+            Stop-Process -Id $tunnelPid -Force -ErrorAction Stop
+            Write-Host "Stopped tunnel (PID $tunnelPid)."
+        } catch {
+            Write-Warning "Could not stop PID $tunnelPid ($_)."
+        }
     }
     Remove-Item $pidFile -Force
 }
@@ -136,9 +145,10 @@ if ($inUse) {
 
 New-Item -ItemType Directory -Force -Path $pidDir | Out-Null
 
-# -f backgrounds ssh after auth; we capture the resulting child PID via
-# Start-Process and persist it so -Stop can find it later.
-$proc = Start-Process -FilePath 'ssh' -ArgumentList $sshArgs -PassThru -WindowStyle Hidden
+# -f backgrounds ssh after auth. The foreground process exits immediately;
+# we re-discover the daemonised child by which process is now listening on
+# the local port (below).
+Start-Process -FilePath 'ssh' -ArgumentList $sshArgs -WindowStyle Hidden
 Start-Sleep -Seconds 1
 
 # After -f, the foreground ssh exits and the daemonised child does the work.

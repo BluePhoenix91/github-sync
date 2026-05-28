@@ -83,7 +83,7 @@ Once `Select-String` becomes the bottleneck, switch to [Seq](#seq) for the same 
 
 ### Why opt-in, not always-on
 
-The file sink alone is the durable record. Seq is for interactive investigations — installing it is a host-side operation ([deploy.md → Seq](deploy.md#seq)), and there's no reason to log to a sink that may not exist yet. Flipping `SEQ_SERVER_URL` on the app pool is the same one-line change as any other secret, and a deploy picks it up on next start.
+The file sink alone is the durable record. Seq is for interactive investigations — installing it is a host-side operation ([deploy.md → Seq](deploy.md#seq)), and there's no reason to log to a sink that may not exist yet. `SEQ_SERVER_URL` is written onto the app pool by CD as plain config (not a secret — see [deploy.md → Wire the API to Seq](deploy.md#wire-the-api-to-seq)); toggling Seq off is a one-line edit in `cd.yml` plus a redeploy.
 
 ### Access
 
