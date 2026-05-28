@@ -521,6 +521,57 @@ public class GitHubIssueFetcherTests
             $"Cancellation should be prompt; took {sw.Elapsed.TotalMilliseconds}ms");
     }
 
+    [Fact]
+    public async Task Yielded_events_are_in_non_decreasing_IssueUpdatedAt_order()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(MultiIssueOrderedBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var events = await CollectAsync(fetcher);
+
+        Assert.NotEmpty(events);
+        for (var i = 1; i < events.Count; i++)
+        {
+            Assert.True(events[i].IssueUpdatedAt >= events[i - 1].IssueUpdatedAt,
+                $"Order violation at index {i}: {events[i].IssueUpdatedAt:o} < {events[i - 1].IssueUpdatedAt:o}");
+        }
+    }
+
+    private const string MultiIssueOrderedBody = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": [
+                  {
+                    "id": "I_a", "number": 1, "databaseId": 1,
+                    "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z",
+                    "title": "a", "body": "ab",
+                    "author": { "login": "a", "databaseId": 1, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] }
+                  },
+                  {
+                    "id": "I_b", "number": 2, "databaseId": 2,
+                    "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-03T00:00:00Z",
+                    "title": "b", "body": "bb",
+                    "author": { "login": "b", "databaseId": 2, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
     private static async Task<List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>> CollectAsync(
         global::GithubSync.Sources.GitHub.IGitHubIssueFetcher fetcher)
     {
