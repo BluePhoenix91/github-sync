@@ -56,4 +56,61 @@ public class GitHubGraphQLClientTests
         Assert.Equal(3, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
     }
 
+    [Fact]
+    public async Task Secondary_rate_limit_retry_followed_by_401_throws_GitHubAuthException()
+    {
+        using var server = new WireMockGitHubServer();
+        var scenario = "retry-then-401";
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+#pragma warning disable CS8625 // WireMock.Net WhenStateIs(null) is the documented API for "initial state"
+            .InScenario(scenario).WhenStateIs(null)
+#pragma warning restore CS8625
+            .WillSetStateTo("retried")
+            .RespondWith(Response.Create().WithStatusCode(403).WithHeader("Retry-After", "1"));
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario).WhenStateIs("retried")
+            .RespondWith(Response.Create().WithStatusCode((int)HttpStatusCode.Unauthorized));
+
+        var client = FetcherTestHarness.BuildClient(server.BaseUrl);
+
+        await Assert.ThrowsAsync<global::GithubSync.Sources.GitHub.Exceptions.GitHubAuthException>(
+            async () => await client.QueryIssuesPageAsync("o", "r", since: null, cursor: null, ct: default));
+
+        Assert.Equal(2, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
+    [Fact]
+    public async Task Primary_rate_limit_retry_followed_by_401_throws_GitHubAuthException()
+    {
+        using var server = new WireMockGitHubServer();
+        var scenario = "primary-retry-then-401";
+        var resetEpoch = DateTimeOffset.UtcNow.AddSeconds(2).ToUnixTimeSeconds().ToString();
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+#pragma warning disable CS8625 // WireMock.Net WhenStateIs(null) is the documented API for "initial state"
+            .InScenario(scenario).WhenStateIs(null)
+#pragma warning restore CS8625
+            .WillSetStateTo("retried")
+            .RespondWith(Response.Create().WithStatusCode(403)
+                .WithHeader("X-RateLimit-Remaining", "0")
+                .WithHeader("X-RateLimit-Reset", resetEpoch));
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario).WhenStateIs("retried")
+            .RespondWith(Response.Create().WithStatusCode((int)HttpStatusCode.Unauthorized));
+
+        var client = FetcherTestHarness.BuildClient(server.BaseUrl);
+
+        await Assert.ThrowsAsync<global::GithubSync.Sources.GitHub.Exceptions.GitHubAuthException>(
+            async () => await client.QueryIssuesPageAsync("o", "r", since: null, cursor: null, ct: default));
+
+        Assert.Equal(2, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
 }

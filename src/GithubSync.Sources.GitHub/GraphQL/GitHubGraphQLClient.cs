@@ -94,16 +94,7 @@ internal sealed class GitHubGraphQLClient(HttpClient httpClient)
 
         if (response.StatusCode != HttpStatusCode.Forbidden)
         {
-            // Non-success non-403 (typically a 5xx that exhausted Polly's retries) must surface as
-            // a transport error, not be allowed to flow into JSON deserialization where a malformed
-            // or HTML error body would throw a misleading exception type.
-            if (!response.IsSuccessStatusCode)
-            {
-                var status = response.StatusCode;
-                response.Dispose();
-                throw new HttpRequestException(
-                    $"GitHub returned non-success status {(int)status} {status}.", null, status);
-            }
+            EnsureSuccessOrThrow(response, string.Empty);
             return response;
         }
 
@@ -119,13 +110,13 @@ internal sealed class GitHubGraphQLClient(HttpClient httpClient)
                 retried.Dispose();
                 throw new GitHubRateLimitException("Rate-limit retry still returned 403.");
             }
-            if (!retried.IsSuccessStatusCode)
+            if (retried.StatusCode == HttpStatusCode.Unauthorized)
             {
-                var status = retried.StatusCode;
                 retried.Dispose();
-                throw new HttpRequestException(
-                    $"GitHub returned non-success status {(int)status} {status} after rate-limit retry.", null, status);
+                throw new GitHubAuthException("GitHub returned 401 Unauthorized after rate-limit retry.");
             }
+
+            EnsureSuccessOrThrow(retried, " after rate-limit retry");
             return retried;
         }
 
@@ -163,6 +154,20 @@ internal sealed class GitHubGraphQLClient(HttpClient httpClient)
 
         wait = default;
         return false;
+    }
+
+    private static void EnsureSuccessOrThrow(HttpResponseMessage response, string contextSuffix)
+    {
+        // Non-success non-403 (typically a 5xx that exhausted Polly's retries) must surface as
+        // a transport error, not be allowed to flow into JSON deserialization where a malformed
+        // or HTML error body would throw a misleading exception type.
+        if (response.IsSuccessStatusCode)
+            return;
+
+        var status = response.StatusCode;
+        response.Dispose();
+        throw new HttpRequestException(
+            $"GitHub returned non-success status {(int)status} {status}{contextSuffix}.", null, status);
     }
 
     // HttpRequestMessage instances cannot be re-sent; clone for retry.
