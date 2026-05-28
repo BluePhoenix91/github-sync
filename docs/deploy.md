@@ -382,11 +382,13 @@ The script is intentionally idempotent on the open side: if it sees something al
 
 ### Wire the API to Seq
 
-1. Add a `SEQ_SERVER_URL` env var to the `github-sync-api` IIS app pool, value `http://localhost:5341`. The simplest path: extend the CD workflow's "Configure app pool environment variables" step to write `SEQ_SERVER_URL` alongside the four existing secrets (Seq URL is a deploy-time *config value*, not a secret — putting it in the same step keeps the env-var set in one place).
-2. Recycle the app pool (next deploy does this automatically).
-3. Verify in the Seq UI: a search like `ApplicationName = 'github-sync'` should show recent events within seconds of the next request hitting the API.
+CD writes `SEQ_SERVER_URL=http://localhost:5341` onto the `github-sync-api` app pool on every deploy — see the `$config` block in the "Configure app pool environment variables" step of [`cd.yml`](../.github/workflows/cd.yml). It is **not** a GitHub Actions secret (the value is operationally fixed; the box's loopback URL doesn't rotate) and **not** in `RequiredSecrets`. If it is ever unset — by commenting the line in `cd.yml` and redeploying — [`LoggingWiring`](../src/GithubSync.Api/Startup/LoggingWiring.cs) skips the Seq sink and the API logs to file + Sentry exactly as before. That's a supported state for temporarily turning Seq off, not a misconfiguration.
 
-`SEQ_SERVER_URL` is **not** added to `RequiredSecrets`. If it is unset, [`LoggingWiring`](../src/GithubSync.Api/Startup/LoggingWiring.cs) skips the Seq sink and the API logs to file + Sentry exactly as before — leaving the var off is a supported state, not a misconfiguration.
+Verifying after the next deploy:
+
+1. Wait for the CD run that includes the change to land.
+2. Hit any API endpoint (a `/healthz` probe is enough).
+3. In the Seq UI, search `ApplicationName = 'github-sync'`. Events should appear within seconds.
 
 ### Retention
 
