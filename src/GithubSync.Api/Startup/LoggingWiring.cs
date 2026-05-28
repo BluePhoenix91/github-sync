@@ -14,6 +14,12 @@ public static class LoggingWiring
     internal const string MachineNameKey = "MachineName";
     public const string SeqServerUrlConfigKey = "SEQ_SERVER_URL";
 
+    // Bounded queue size for the async file-sink wrapper. Matches the
+    // Serilog.Sinks.Async default; set explicitly so the choice is visible.
+    // With blockWhenFull: false, drops on overflow surface via Serilog SelfLog
+    // (configure SelfLog.Enable to capture overruns when diagnosing slow disks).
+    internal const int FileSinkAsyncBufferSize = 10_000;
+
     public static void Configure(WebApplicationBuilder builder)
     {
         builder.Host.UseSerilog((context, _, configuration) =>
@@ -41,14 +47,16 @@ public static class LoggingWiring
         }
         else
         {
-            configuration.WriteTo.File(
+            configuration.WriteTo.Async(a => a.File(
                 formatter: new CompactJsonFormatter(),
                 path: "logs/app-.log",
                 rollingInterval: RollingInterval.Day,
                 rollOnFileSizeLimit: true,
                 fileSizeLimitBytes: 1L * 1024 * 1024 * 1024,
                 retainedFileCountLimit: 14,
-                shared: true);
+                shared: true),
+                bufferSize: FileSinkAsyncBufferSize,
+                blockWhenFull: false);
 
             if (ShouldEnableSeq(seqServerUrl))
             {
