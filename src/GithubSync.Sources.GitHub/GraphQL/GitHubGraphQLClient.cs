@@ -94,6 +94,16 @@ internal sealed class GitHubGraphQLClient(HttpClient httpClient)
 
         if (response.StatusCode != HttpStatusCode.Forbidden)
         {
+            // Non-success non-403 (typically a 5xx that exhausted Polly's retries) must surface as
+            // a transport error, not be allowed to flow into JSON deserialization where a malformed
+            // or HTML error body would throw a misleading exception type.
+            if (!response.IsSuccessStatusCode)
+            {
+                var status = response.StatusCode;
+                response.Dispose();
+                throw new HttpRequestException(
+                    $"GitHub returned non-success status {(int)status} {status}.", null, status);
+            }
             return response;
         }
 
@@ -108,6 +118,13 @@ internal sealed class GitHubGraphQLClient(HttpClient httpClient)
             {
                 retried.Dispose();
                 throw new GitHubRateLimitException("Rate-limit retry still returned 403.");
+            }
+            if (!retried.IsSuccessStatusCode)
+            {
+                var status = retried.StatusCode;
+                retried.Dispose();
+                throw new HttpRequestException(
+                    $"GitHub returned non-success status {(int)status} {status} after rate-limit retry.", null, status);
             }
             return retried;
         }

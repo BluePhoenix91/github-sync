@@ -632,6 +632,137 @@ public class GitHubIssueFetcherTests
         Assert.True(completed.Properties.ContainsKey("RateLimitRemaining"));
     }
 
+    [Fact]
+    public async Task Transient_503_after_retry_exhaustion_throws_HttpRequestException()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(503));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        await Assert.ThrowsAsync<HttpRequestException>(async () => await CollectAsync(fetcher));
+
+        // 1 initial + 3 Polly retries
+        Assert.Equal(4, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
+    [Fact]
+    public async Task Multi_connection_overflow_yields_events_in_global_event_time_order()
+    {
+        using var server = new WireMockGitHubServer();
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("IssuesPage")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(MultiOverflowOuter));
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("IssueTimelineFollowUp")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(MultiOverflowTimelineFollowUp));
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("IssueCommentsFollowUp")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(MultiOverflowCommentsFollowUp));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var events = await CollectAsync(fetcher);
+
+        // Sanity: all 5 events present
+        Assert.Equal(5, events.Count);
+
+        // Global EventTime ordering across initial + follow-up + multiple connections
+        for (var i = 1; i < events.Count; i++)
+        {
+            Assert.True(events[i].EventTime >= events[i - 1].EventTime,
+                $"EventTime order violated at index {i}: {events[i].EventTime:o} < {events[i - 1].EventTime:o}");
+        }
+
+        // The follow-up comment (11:00) must come before the follow-up close (14:00),
+        // even though comments were enumerated after timeline in DrainOverflowingConnectionsAsync.
+        var followUpComment = events.Single(e => e.SourceEventId == "C_MID");
+        var followUpClose = events.Single(e => e.SourceEventId == "CE_LATE");
+        Assert.True(events.IndexOf(followUpComment) < events.IndexOf(followUpClose));
+    }
+
+    private const string MultiOverflowOuter = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": [
+                  {
+                    "id": "I_kw_50", "number": 50, "databaseId": 50,
+                    "createdAt": "2026-01-01T10:00:00Z", "updatedAt": "2026-01-01T15:00:00Z",
+                    "title": "multi overflow", "body": "test",
+                    "author": { "login": "x", "databaseId": 1, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": {
+                      "pageInfo": { "endCursor": "c-cursor", "hasNextPage": true },
+                      "nodes": [
+                        { "id": "C_INIT", "databaseId": 1, "createdAt": "2026-01-01T10:30:00Z", "body": "hi",
+                          "author": { "login": "x", "databaseId": 1, "__typename": "User" } }
+                      ]
+                    },
+                    "timelineItems": {
+                      "pageInfo": { "endCursor": "t-cursor", "hasNextPage": true },
+                      "nodes": [
+                        { "__typename": "LabeledEvent", "id": "LE_INIT", "createdAt": "2026-01-01T10:15:00Z",
+                          "actor": { "login": "x", "databaseId": 1, "__typename": "User" },
+                          "label": { "name": "bug" } }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private const string MultiOverflowTimelineFollowUp = """
+        {
+          "data": {
+            "repository": {
+              "issue": {
+                "timelineItems": {
+                  "pageInfo": { "endCursor": null, "hasNextPage": false },
+                  "nodes": [
+                    { "__typename": "ClosedEvent", "id": "CE_LATE", "createdAt": "2026-01-01T14:00:00Z",
+                      "actor": { "login": "x", "databaseId": 1, "__typename": "User" } }
+                  ]
+                }
+              }
+            },
+            "rateLimit": { "remaining": 4998, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private const string MultiOverflowCommentsFollowUp = """
+        {
+          "data": {
+            "repository": {
+              "issue": {
+                "comments": {
+                  "pageInfo": { "endCursor": null, "hasNextPage": false },
+                  "nodes": [
+                    { "id": "C_MID", "databaseId": 2, "createdAt": "2026-01-01T11:00:00Z", "body": "later",
+                      "author": { "login": "x", "databaseId": 1, "__typename": "User" } }
+                  ]
+                }
+              }
+            },
+            "rateLimit": { "remaining": 4997, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
     private static async Task<List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>> CollectAsync(
         global::GithubSync.Sources.GitHub.IGitHubIssueFetcher fetcher)
     {

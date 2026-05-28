@@ -46,13 +46,21 @@ internal sealed class GitHubIssueFetcher(
             foreach (var issue in issues.Nodes)
             {
                 issuesYielded++;
-                foreach (var ev in ExtractEvents(issue, since))
-                {
-                    eventsYielded++;
-                    yield return ev;
-                }
+
+                // Buffer initial-page + follow-up events for this issue, then sort across all of them
+                // before yielding. Sorting only the initial page (or sorting connections in isolation)
+                // would break the within-issue event-time ordering contract whenever multiple
+                // connections overflow with interleaved event times.
+                var issueEvents = ExtractInitialPageEvents(issue, since);
 
                 await foreach (var ev in DrainOverflowingConnectionsAsync(owner, repo, issue, since, ct))
+                {
+                    issueEvents.Add(ev);
+                }
+
+                issueEvents.Sort(CompareByEventTimeThenId);
+
+                foreach (var ev in issueEvents)
                 {
                     eventsYielded++;
                     yield return ev;
@@ -69,7 +77,7 @@ internal sealed class GitHubIssueFetcher(
             (long)(DateTimeOffset.UtcNow - startedAt).TotalMilliseconds, lastRemaining);
     }
 
-    private static IEnumerable<GitHubIssueEvent> ExtractEvents(IssueNode issue, DateTimeOffset? since)
+    private static List<GitHubIssueEvent> ExtractInitialPageEvents(IssueNode issue, DateTimeOffset? since)
     {
         var sourceEntityId = issue.Number.ToString();
         var issueUpdatedAt = issue.UpdatedAt;
@@ -88,26 +96,20 @@ internal sealed class GitHubIssueFetcher(
                 PayloadJson: SerializeIssueOpenedPayload(issue)));
         }
 
-        // 2. Body edits from the initial page.
         if (issue.UserContentEdits is { } edits)
             events.AddRange(ExtractEditEvents(sourceEntityId, issueUpdatedAt, edits.Nodes, since));
-
-        // 3. Comments from the initial page.
         if (issue.Comments is { } comments)
             events.AddRange(ExtractCommentEvents(sourceEntityId, issueUpdatedAt, comments.Nodes, since));
-
-        // 4. Timeline items from the initial page.
         if (issue.TimelineItems is { } timeline)
             events.AddRange(ExtractTimelineEvents(sourceEntityId, issueUpdatedAt, timeline.Nodes, since));
 
-        // Within-issue: order by event time, then by SourceEventId for ties.
-        events.Sort((a, b) =>
-        {
-            var c = a.EventTime.CompareTo(b.EventTime);
-            return c != 0 ? c : string.CompareOrdinal(a.SourceEventId ?? "", b.SourceEventId ?? "");
-        });
-
         return events;
+    }
+
+    private static int CompareByEventTimeThenId(GitHubIssueEvent a, GitHubIssueEvent b)
+    {
+        var c = a.EventTime.CompareTo(b.EventTime);
+        return c != 0 ? c : string.CompareOrdinal(a.SourceEventId ?? "", b.SourceEventId ?? "");
     }
 
     private static string SerializeIssueOpenedPayload(IssueNode issue) =>
