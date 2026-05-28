@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\GithubSync.Data\GithubSync.Data.csproj" />
+    <ProjectReference Include="..\GithubSync.Sources.GitHub\GithubSync.Sources.GitHub.csproj" />
   </ItemGroup>
 
   <ItemGroup>

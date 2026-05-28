@@ -1,0 +1,774 @@
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+
+namespace GithubSync.Tests.Sources.GitHub;
+
+public class GitHubIssueFetcherTests
+{
+    [Fact]
+    public async Task Empty_page_yields_zero_events()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(EmptyPageBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        var events = new List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>();
+        await foreach (var e in fetcher.FetchAsync("octocat", "Hello-World", since: null, ct: default))
+        {
+            events.Add(e);
+        }
+
+        Assert.Empty(events);
+    }
+
+    [Fact]
+    public async Task Single_page_with_varied_content_yields_expected_events_in_order()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(SinglePageVariedBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        var events = await CollectAsync(fetcher);
+
+        // One issue with: create (synth), label, comment, close — in event-time order.
+        Assert.Equal(4, events.Count);
+        Assert.Equal(global::GithubSync.Sources.GitHub.GitHubEventKind.IssueOpened, events[0].Kind);
+        Assert.Equal(global::GithubSync.Sources.GitHub.GitHubEventKind.Labeled, events[1].Kind);
+        Assert.Equal(global::GithubSync.Sources.GitHub.GitHubEventKind.Commented, events[2].Kind);
+        Assert.Equal(global::GithubSync.Sources.GitHub.GitHubEventKind.Closed, events[3].Kind);
+        Assert.All(events, e => Assert.Equal("42", e.SourceEntityId));
+    }
+
+    [Fact]
+    public async Task Null_actor_is_passed_through_not_skipped()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(NullActorBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        var events = await CollectAsync(fetcher);
+
+        // Two events: create (synth, with author), labeled (with null actor)
+        Assert.Equal(2, events.Count);
+        var labeled = events.Single(e => e.Kind == global::GithubSync.Sources.GitHub.GitHubEventKind.Labeled);
+        Assert.Null(labeled.Actor);
+    }
+
+    [Fact]
+    public async Task Since_filter_excludes_events_before_the_cursor()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(SinceFilterBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var since = DateTimeOffset.Parse("2026-01-01T11:00:00Z");
+
+        var events = new List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>();
+        await foreach (var e in fetcher.FetchAsync("octocat", "Hello-World", since, default))
+            events.Add(e);
+
+        // Issue created at 10:00 (before since); labeled at 12:00 (after since).
+        // Only the labeled event should pass the filter.
+        Assert.Single(events);
+        Assert.Equal(global::GithubSync.Sources.GitHub.GitHubEventKind.Labeled, events[0].Kind);
+    }
+
+    private const string SinceFilterBody = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": [
+                  {
+                    "id": "I_kw_60",
+                    "number": 60,
+                    "databaseId": 6060,
+                    "createdAt": "2026-01-01T10:00:00Z",
+                    "updatedAt": "2026-01-01T12:00:00Z",
+                    "title": "old issue still updating",
+                    "body": "body",
+                    "author": { "login": "octocat", "databaseId": 1, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": {
+                      "pageInfo": { "endCursor": null, "hasNextPage": false },
+                      "nodes": [
+                        { "__typename": "LabeledEvent", "id": "LE_60", "createdAt": "2026-01-01T12:00:00Z",
+                          "actor": { "login": "octocat", "databaseId": 1, "__typename": "User" },
+                          "label": { "name": "regression" } }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private const string EmptyPageBody = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": []
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private const string SinglePageVariedBody = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": [
+                  {
+                    "id": "I_kw_42",
+                    "number": 42,
+                    "databaseId": 4242,
+                    "createdAt": "2026-01-01T10:00:00Z",
+                    "updatedAt": "2026-01-01T12:00:00Z",
+                    "author": { "login": "octocat", "databaseId": 1, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": {
+                      "pageInfo": { "endCursor": null, "hasNextPage": false },
+                      "nodes": [
+                        { "id": "C_1", "databaseId": 5001, "createdAt": "2026-01-01T10:30:00Z", "body": "hi",
+                          "author": { "login": "octocat", "databaseId": 1, "__typename": "User" } }
+                      ]
+                    },
+                    "timelineItems": {
+                      "pageInfo": { "endCursor": null, "hasNextPage": false },
+                      "nodes": [
+                        { "__typename": "LabeledEvent", "id": "LE_1", "createdAt": "2026-01-01T10:15:00Z",
+                          "actor": { "login": "octocat", "databaseId": 1, "__typename": "User" },
+                          "label": { "name": "bug" } },
+                        { "__typename": "ClosedEvent", "id": "CE_1", "createdAt": "2026-01-01T12:00:00Z",
+                          "actor": { "login": "octocat", "databaseId": 1, "__typename": "User" } }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private const string NullActorBody = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": [
+                  {
+                    "id": "I_kw_99",
+                    "number": 99,
+                    "databaseId": 9999,
+                    "createdAt": "2026-01-01T10:00:00Z",
+                    "updatedAt": "2026-01-01T11:00:00Z",
+                    "author": { "login": "octocat", "databaseId": 1, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": {
+                      "pageInfo": { "endCursor": null, "hasNextPage": false },
+                      "nodes": [
+                        { "__typename": "LabeledEvent", "id": "LE_99", "createdAt": "2026-01-01T11:00:00Z",
+                          "actor": null,
+                          "label": { "name": "stale" } }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    [Fact]
+    public async Task Outer_pagination_walks_two_pages_passing_endCursor_as_after()
+    {
+        using var server = new WireMockGitHubServer();
+
+        // Page 1: hasNextPage true, returns 1 issue
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && !b.Contains("\"cursor\":\"page2cursor\"")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(PaginationPage1));
+
+        // Page 2: cursor present, hasNextPage false
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("\"cursor\":\"page2cursor\"")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(PaginationPage2));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var events = await CollectAsync(fetcher);
+
+        // 2 issues across pages, each yielding only IssueOpened (no timeline content)
+        Assert.Equal(2, events.Count);
+        Assert.Equal(new[] { "1", "2" }, events.Select(e => e.SourceEntityId).ToArray());
+    }
+
+    private const string PaginationPage1 = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": "page2cursor", "hasNextPage": true },
+                "nodes": [
+                  {
+                    "id": "I_kw_1", "number": 1, "databaseId": 1, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z",
+                    "title": "first", "body": "b1",
+                    "author": { "login": "a", "databaseId": 1, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private const string PaginationPage2 = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": [
+                  {
+                    "id": "I_kw_2", "number": 2, "databaseId": 2, "createdAt": "2026-01-02T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z",
+                    "title": "second", "body": "b2",
+                    "author": { "login": "b", "databaseId": 2, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4998, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    [Fact]
+    public async Task Inner_pagination_follow_up_drains_overflowing_timeline()
+    {
+        using var server = new WireMockGitHubServer();
+
+        // Outer query: 1 issue with timeline.hasNextPage = true, endCursor = "t-cursor"
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("IssuesPage")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(OuterWithOverflow));
+
+        // Follow-up timeline: hasNextPage = false, returns one more event
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("IssueTimelineFollowUp")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(FollowUpTimeline));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var events = await CollectAsync(fetcher);
+
+        // Expected: IssueOpened + initial LabeledEvent + follow-up ClosedEvent = 3 events
+        Assert.Equal(3, events.Count);
+        Assert.Contains(events, e => e.Kind == global::GithubSync.Sources.GitHub.GitHubEventKind.Closed);
+
+        // Verify the follow-up query was called exactly once
+        var followUps = server.Server.LogEntries
+            .Count(le => le.RequestMessage.Body?.Contains("IssueTimelineFollowUp") == true);
+        Assert.Equal(1, followUps);
+    }
+
+    private const string OuterWithOverflow = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": [
+                  {
+                    "id": "I_kw_77", "number": 77, "databaseId": 77,
+                    "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T01:00:00Z",
+                    "title": "long-running", "body": "issue 77",
+                    "author": { "login": "x", "databaseId": 1, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": {
+                      "pageInfo": { "endCursor": "t-cursor", "hasNextPage": true },
+                      "nodes": [
+                        { "__typename": "LabeledEvent", "id": "LE_X", "createdAt": "2026-01-01T00:30:00Z",
+                          "actor": { "login": "x", "databaseId": 1, "__typename": "User" },
+                          "label": { "name": "bug" } }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private const string FollowUpTimeline = """
+        {
+          "data": {
+            "repository": {
+              "issue": {
+                "timelineItems": {
+                  "pageInfo": { "endCursor": null, "hasNextPage": false },
+                  "nodes": [
+                    { "__typename": "ClosedEvent", "id": "CE_X", "createdAt": "2026-01-01T01:00:00Z",
+                      "actor": { "login": "x", "databaseId": 1, "__typename": "User" } }
+                  ]
+                }
+              }
+            },
+            "rateLimit": { "remaining": 4998, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    [Fact]
+    public async Task Secondary_rate_limit_retry_after_header_sleeps_then_succeeds()
+    {
+        using var server = new WireMockGitHubServer();
+        var scenario = "ratelimit-secondary";
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+#pragma warning disable CS8625 // WireMock.Net WhenStateIs(null) is the documented API for "initial state"
+            .InScenario(scenario).WhenStateIs(null)
+#pragma warning restore CS8625
+            .WillSetStateTo("retried")
+            .RespondWith(Response.Create().WithStatusCode(403).WithHeader("Retry-After", "1"));
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario).WhenStateIs("retried")
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(EmptyPageBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var events = await CollectAsync(fetcher);
+        sw.Stop();
+
+        Assert.Empty(events);
+        Assert.True(sw.Elapsed >= TimeSpan.FromMilliseconds(900),
+            $"Expected ~1s wait, took {sw.Elapsed.TotalMilliseconds}ms");
+        Assert.Equal(2, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
+    [Fact]
+    public async Task Primary_rate_limit_via_X_RateLimit_headers_sleeps_then_succeeds()
+    {
+        using var server = new WireMockGitHubServer();
+        var scenario = "ratelimit-primary";
+        // Add 2s so the sleep is still well above the 700ms assertion threshold even after
+        // test setup overhead (server start, first HTTP round trip) has consumed ~300-500ms.
+        var resetAt = DateTimeOffset.UtcNow.AddSeconds(2).ToUnixTimeSeconds();
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+#pragma warning disable CS8625 // WireMock.Net WhenStateIs(null) is the documented API for "initial state"
+            .InScenario(scenario).WhenStateIs(null)
+#pragma warning restore CS8625
+            .WillSetStateTo("retried")
+            .RespondWith(Response.Create().WithStatusCode(403)
+                .WithHeader("X-RateLimit-Remaining", "0")
+                .WithHeader("X-RateLimit-Reset", resetAt.ToString()));
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario).WhenStateIs("retried")
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(EmptyPageBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var events = await CollectAsync(fetcher);
+        sw.Stop();
+
+        Assert.Empty(events);
+        Assert.True(sw.Elapsed >= TimeSpan.FromMilliseconds(700),
+            $"Expected ~1s wait until reset, took {sw.Elapsed.TotalMilliseconds}ms");
+    }
+
+    [Fact]
+    public async Task Transient_503_retries_then_succeeds()
+    {
+        using var server = new WireMockGitHubServer();
+        var scenario = "transient";
+
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario)
+#pragma warning disable CS8625 // WireMock.Net WhenStateIs(null) is the documented API for "initial state"
+            .WhenStateIs(null)
+#pragma warning restore CS8625
+            .WillSetStateTo("one")
+            .RespondWith(Response.Create().WithStatusCode(503));
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario).WhenStateIs("one").WillSetStateTo("two")
+            .RespondWith(Response.Create().WithStatusCode(503));
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario).WhenStateIs("two")
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(EmptyPageBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var events = await CollectAsync(fetcher);
+
+        Assert.Empty(events);
+        Assert.Equal(3, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
+    [Fact]
+    public async Task GraphQL_errors_body_throws_GitHubGraphQLException()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(GraphQLErrorBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        await Assert.ThrowsAsync<global::GithubSync.Sources.GitHub.Exceptions.GitHubGraphQLException>(
+            async () => await CollectAsync(fetcher));
+
+        Assert.Equal(1, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
+    [Fact]
+    public async Task Status_401_throws_GitHubAuthException_no_retry()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(401));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        await Assert.ThrowsAsync<global::GithubSync.Sources.GitHub.Exceptions.GitHubAuthException>(
+            async () => await CollectAsync(fetcher));
+        Assert.Equal(1, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
+    [Fact]
+    public async Task Status_403_without_rate_limit_signals_throws_GitHubAuthException()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(403));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        await Assert.ThrowsAsync<global::GithubSync.Sources.GitHub.Exceptions.GitHubAuthException>(
+            async () => await CollectAsync(fetcher));
+    }
+
+    private const string GraphQLErrorBody = """
+        {
+          "data": null,
+          "errors": [
+            { "message": "Field 'foo' doesn't exist on type 'Repository'", "type": "FIELD_NOT_FOUND" }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task Cancellation_during_rate_limit_sleep_aborts_quickly()
+    {
+        using var server = new WireMockGitHubServer();
+        // Force a 30s Retry-After so the fetcher is mid-sleep when cancellation fires.
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(403).WithHeader("Retry-After", "30"));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in fetcher.FetchAsync("o", "r", null, cts.Token)) { }
+        });
+
+        sw.Stop();
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2),
+            $"Cancellation should be prompt; took {sw.Elapsed.TotalMilliseconds}ms");
+    }
+
+    [Fact]
+    public async Task Yielded_events_are_in_non_decreasing_IssueUpdatedAt_order()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(MultiIssueOrderedBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var events = await CollectAsync(fetcher);
+
+        Assert.NotEmpty(events);
+        for (var i = 1; i < events.Count; i++)
+        {
+            Assert.True(events[i].IssueUpdatedAt >= events[i - 1].IssueUpdatedAt,
+                $"Order violation at index {i}: {events[i].IssueUpdatedAt:o} < {events[i - 1].IssueUpdatedAt:o}");
+        }
+    }
+
+    private const string MultiIssueOrderedBody = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": [
+                  {
+                    "id": "I_a", "number": 1, "databaseId": 1,
+                    "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z",
+                    "title": "a", "body": "ab",
+                    "author": { "login": "a", "databaseId": 1, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] }
+                  },
+                  {
+                    "id": "I_b", "number": 2, "databaseId": 2,
+                    "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-03T00:00:00Z",
+                    "title": "b", "body": "bb",
+                    "author": { "login": "b", "databaseId": 2, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    [Fact]
+    public async Task Pre_flight_budget_wait_pauses_before_next_query()
+    {
+        using var server = new WireMockGitHubServer();
+        var resetAt = DateTimeOffset.UtcNow.AddSeconds(2).ToString("o");
+
+        // Page 1: hasNextPage=true, budget remaining=1 cost=100 -> forces pre-flight wait before page 2
+        var body1 = $$"""
+            {
+              "data": {
+                "repository": {
+                  "issues": {
+                    "pageInfo": { "endCursor": "next", "hasNextPage": true },
+                    "nodes": []
+                  }
+                },
+                "rateLimit": { "remaining": 1, "cost": 100, "resetAt": "{{resetAt}}", "limit": 5000 }
+              }
+            }
+            """;
+
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && !b.Contains("\"cursor\":\"next\"")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(body1));
+
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("\"cursor\":\"next\"")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(EmptyPageBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var events = await CollectAsync(fetcher);
+        sw.Stop();
+
+        Assert.Empty(events);
+        Assert.True(sw.Elapsed >= TimeSpan.FromMilliseconds(700),
+            $"Expected pre-flight wait of ~1s, took {sw.Elapsed.TotalMilliseconds}ms");
+    }
+
+    [Fact]
+    public async Task Logs_structured_start_and_end_events()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(EmptyPageBody));
+
+        var sink = new CapturingSink();
+        var fetcher = FetcherTestHarness.BuildWithSink(server.BaseUrl, sink);
+
+        await CollectAsync(fetcher);
+
+        var started = Assert.Single(sink.Events, r => r.RenderMessage().Contains("fetch started"));
+        var completed = Assert.Single(sink.Events, r => r.RenderMessage().Contains("fetch completed"));
+        Assert.Contains("github", started.Properties["Source"]?.ToString() ?? "");
+        Assert.Contains("octocat", started.Properties["Owner"]?.ToString() ?? "");
+        Assert.True(completed.Properties.ContainsKey("DurationMs"));
+        Assert.True(completed.Properties.ContainsKey("RateLimitRemaining"));
+    }
+
+    [Fact]
+    public async Task Transient_503_after_retry_exhaustion_throws_HttpRequestException()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(503));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        await Assert.ThrowsAsync<HttpRequestException>(async () => await CollectAsync(fetcher));
+
+        // 1 initial + 3 Polly retries
+        Assert.Equal(4, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
+    [Fact]
+    public async Task Multi_connection_overflow_yields_events_in_global_event_time_order()
+    {
+        using var server = new WireMockGitHubServer();
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("IssuesPage")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(MultiOverflowOuter));
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("IssueTimelineFollowUp")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(MultiOverflowTimelineFollowUp));
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("IssueCommentsFollowUp")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(MultiOverflowCommentsFollowUp));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var events = await CollectAsync(fetcher);
+
+        // Sanity: all 5 events present
+        Assert.Equal(5, events.Count);
+
+        // Global EventTime ordering across initial + follow-up + multiple connections
+        for (var i = 1; i < events.Count; i++)
+        {
+            Assert.True(events[i].EventTime >= events[i - 1].EventTime,
+                $"EventTime order violated at index {i}: {events[i].EventTime:o} < {events[i - 1].EventTime:o}");
+        }
+
+        // The follow-up comment (11:00) must come before the follow-up close (14:00),
+        // even though comments were enumerated after timeline in DrainOverflowingConnectionsAsync.
+        var followUpComment = events.Single(e => e.SourceEventId == "C_MID");
+        var followUpClose = events.Single(e => e.SourceEventId == "CE_LATE");
+        Assert.True(events.IndexOf(followUpComment) < events.IndexOf(followUpClose));
+    }
+
+    private const string MultiOverflowOuter = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": [
+                  {
+                    "id": "I_kw_50", "number": 50, "databaseId": 50,
+                    "createdAt": "2026-01-01T10:00:00Z", "updatedAt": "2026-01-01T15:00:00Z",
+                    "title": "multi overflow", "body": "test",
+                    "author": { "login": "x", "databaseId": 1, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": {
+                      "pageInfo": { "endCursor": "c-cursor", "hasNextPage": true },
+                      "nodes": [
+                        { "id": "C_INIT", "databaseId": 1, "createdAt": "2026-01-01T10:30:00Z", "body": "hi",
+                          "author": { "login": "x", "databaseId": 1, "__typename": "User" } }
+                      ]
+                    },
+                    "timelineItems": {
+                      "pageInfo": { "endCursor": "t-cursor", "hasNextPage": true },
+                      "nodes": [
+                        { "__typename": "LabeledEvent", "id": "LE_INIT", "createdAt": "2026-01-01T10:15:00Z",
+                          "actor": { "login": "x", "databaseId": 1, "__typename": "User" },
+                          "label": { "name": "bug" } }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private const string MultiOverflowTimelineFollowUp = """
+        {
+          "data": {
+            "repository": {
+              "issue": {
+                "timelineItems": {
+                  "pageInfo": { "endCursor": null, "hasNextPage": false },
+                  "nodes": [
+                    { "__typename": "ClosedEvent", "id": "CE_LATE", "createdAt": "2026-01-01T14:00:00Z",
+                      "actor": { "login": "x", "databaseId": 1, "__typename": "User" } }
+                  ]
+                }
+              }
+            },
+            "rateLimit": { "remaining": 4998, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private const string MultiOverflowCommentsFollowUp = """
+        {
+          "data": {
+            "repository": {
+              "issue": {
+                "comments": {
+                  "pageInfo": { "endCursor": null, "hasNextPage": false },
+                  "nodes": [
+                    { "id": "C_MID", "databaseId": 2, "createdAt": "2026-01-01T11:00:00Z", "body": "later",
+                      "author": { "login": "x", "databaseId": 1, "__typename": "User" } }
+                  ]
+                }
+              }
+            },
+            "rateLimit": { "remaining": 4997, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private static async Task<List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>> CollectAsync(
+        global::GithubSync.Sources.GitHub.IGitHubIssueFetcher fetcher)
+    {
+        var list = new List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>();
+        await foreach (var e in fetcher.FetchAsync("octocat", "Hello-World", since: null, ct: default))
+            list.Add(e);
+        return list;
+    }
+}
