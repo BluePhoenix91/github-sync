@@ -11,7 +11,7 @@ internal static class IssuesPageQuery
                    orderBy: { field: UPDATED_AT, direction: ASC }) {
               pageInfo { endCursor hasNextPage }
               nodes {
-                id number databaseId createdAt updatedAt
+                id number databaseId createdAt updatedAt title body
                 author { login databaseId __typename }
                 userContentEdits(first: 100) {
                   pageInfo { endCursor hasNextPage }

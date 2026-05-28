@@ -8,6 +8,8 @@ internal sealed record IssueNode(
     [property: JsonPropertyName("databaseId")] long DatabaseId,
     [property: JsonPropertyName("createdAt")] DateTimeOffset CreatedAt,
     [property: JsonPropertyName("updatedAt")] DateTimeOffset UpdatedAt,
+    [property: JsonPropertyName("title")] string? Title,
+    [property: JsonPropertyName("body")] string? Body,
     [property: JsonPropertyName("author")] ActorDto? Author,
     [property: JsonPropertyName("userContentEdits")] EditsConnection? UserContentEdits,
     [property: JsonPropertyName("comments")] CommentsConnection? Comments,

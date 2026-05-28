@@ -148,7 +148,7 @@ internal sealed class GitHubIssueFetcher(
     private static string SerializeIssueOpenedPayload(IssueNode issue) =>
         JsonSerializer.Serialize(new
         {
-            issue.Id, issue.Number, issue.DatabaseId, issue.CreatedAt, issue.Author,
+            issue.Id, issue.Number, issue.DatabaseId, issue.CreatedAt, issue.Title, issue.Body, issue.Author,
         });
 
     private static GitHubActor? ToActor(ActorDto? dto)
