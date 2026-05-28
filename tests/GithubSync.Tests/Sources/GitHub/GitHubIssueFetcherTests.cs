@@ -356,6 +356,70 @@ public class GitHubIssueFetcherTests
         }
         """;
 
+    [Fact]
+    public async Task Secondary_rate_limit_retry_after_header_sleeps_then_succeeds()
+    {
+        using var server = new WireMockGitHubServer();
+        var scenario = "ratelimit-secondary";
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+#pragma warning disable CS8625 // WireMock.Net WhenStateIs(null) is the documented API for "initial state"
+            .InScenario(scenario).WhenStateIs(null)
+#pragma warning restore CS8625
+            .WillSetStateTo("retried")
+            .RespondWith(Response.Create().WithStatusCode(403).WithHeader("Retry-After", "1"));
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario).WhenStateIs("retried")
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(EmptyPageBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var events = await CollectAsync(fetcher);
+        sw.Stop();
+
+        Assert.Empty(events);
+        Assert.True(sw.Elapsed >= TimeSpan.FromMilliseconds(900),
+            $"Expected ~1s wait, took {sw.Elapsed.TotalMilliseconds}ms");
+        Assert.Equal(2, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
+    [Fact]
+    public async Task Primary_rate_limit_via_X_RateLimit_headers_sleeps_then_succeeds()
+    {
+        using var server = new WireMockGitHubServer();
+        var scenario = "ratelimit-primary";
+        // Add 2s so the sleep is still well above the 700ms assertion threshold even after
+        // test setup overhead (server start, first HTTP round trip) has consumed ~300-500ms.
+        var resetAt = DateTimeOffset.UtcNow.AddSeconds(2).ToUnixTimeSeconds();
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+#pragma warning disable CS8625 // WireMock.Net WhenStateIs(null) is the documented API for "initial state"
+            .InScenario(scenario).WhenStateIs(null)
+#pragma warning restore CS8625
+            .WillSetStateTo("retried")
+            .RespondWith(Response.Create().WithStatusCode(403)
+                .WithHeader("X-RateLimit-Remaining", "0")
+                .WithHeader("X-RateLimit-Reset", resetAt.ToString()));
+
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario).WhenStateIs("retried")
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(EmptyPageBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var events = await CollectAsync(fetcher);
+        sw.Stop();
+
+        Assert.Empty(events);
+        Assert.True(sw.Elapsed >= TimeSpan.FromMilliseconds(700),
+            $"Expected ~1s wait until reset, took {sw.Elapsed.TotalMilliseconds}ms");
+    }
+
     private static async Task<List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>> CollectAsync(
         global::GithubSync.Sources.GitHub.IGitHubIssueFetcher fetcher)
     {
