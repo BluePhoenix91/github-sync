@@ -349,7 +349,36 @@ ssh -L 5341:localhost:5341 <user>@<lightsail-host>
 # then browse http://localhost:5341 from the workstation
 ```
 
-Trade-off recorded: an IIS reverse-proxy rule + win-acme cert would let operators bookmark a real URL, but it would add one more public surface to keep patched and certificate-renewed. The SSH tunnel reuses access controls that already exist for the box.
+Trade-off recorded: an IIS reverse-proxy rule + win-acme cert would let operators bookmark a real URL, but it would add one more public surface to keep patched and certificate-renewed. The SSH tunnel reuses access controls that already exist for the box — "who can read logs?" collapses to "who has SSH access?", one ACL instead of two. When someone leaves, removing their SSH key removes Seq access automatically.
+
+#### Tunnel helper script
+
+[`scripts/seq-tunnel.ps1`](../scripts/seq-tunnel.ps1) wraps the `ssh -fNL ...` invocation, opens the browser, and persists the background ssh PID so it can be stopped cleanly. Use it instead of typing the raw `ssh -L` form each time — same tunnel, fewer flags to remember.
+
+**One-time setup** on each operator workstation, in `~/.ssh/config` (or `%USERPROFILE%\.ssh\config` on Windows):
+
+```
+Host gh-sync-seq
+    HostName <lightsail-public-ip-or-dns>
+    User administrator
+    IdentityFile ~/.ssh/lightsail.pem
+    LocalForward 5341 localhost:5341
+    ServerAliveInterval 60
+```
+
+**Daily use:**
+
+```powershell
+# Open the tunnel and launch the Seq UI in the default browser.
+scripts/seq-tunnel.ps1 -SshAlias gh-sync-seq
+
+# When done — or before switching to a different host.
+scripts/seq-tunnel.ps1 -Stop
+```
+
+If the SSH config alias isn't set up, the script also accepts explicit args (`-SshHost`, `-User`, `-IdentityFile`). See the script's comment-based help (`Get-Help scripts/seq-tunnel.ps1 -Full`) for the full parameter list, including `-LocalPort` (when 5341 is already taken on the workstation) and `-NoBrowser` (when scripting against the tunnel instead of using the UI).
+
+The script is intentionally idempotent on the open side: if it sees something already listening on the local port, it assumes the tunnel is up and just opens the browser. It does **not** install OpenSSH, manage keys, or edit `~/.ssh/config` — those are operator-workstation concerns and out of scope for a tunnel helper.
 
 ### Wire the API to Seq
 

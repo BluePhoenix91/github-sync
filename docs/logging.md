@@ -87,12 +87,18 @@ The file sink alone is the durable record. Seq is for interactive investigations
 
 ### Access
 
-The Seq UI listens on `http://localhost:5341` and is **not exposed publicly** — no IIS reverse-proxy rule, no Cloudflare hostname, no inbound firewall opening for port `5341`. Reach it over an SSH tunnel:
+The Seq UI listens on `http://localhost:5341` and is **not exposed publicly** — no IIS reverse-proxy rule, no Cloudflare hostname, no inbound firewall opening for port `5341`. Reach it over an SSH tunnel.
 
-```bash
-ssh -L 5341:localhost:5341 <user>@<lightsail-host>
-# then browse http://localhost:5341 from the operator workstation
+The recommended path is the [`scripts/seq-tunnel.ps1`](../scripts/seq-tunnel.ps1) helper:
+
+```powershell
+scripts/seq-tunnel.ps1 -SshAlias gh-sync-seq    # tunnel up + browser opens
+scripts/seq-tunnel.ps1 -Stop                    # tunnel down
 ```
+
+Setup of the `gh-sync-seq` SSH config alias and the full operate/troubleshoot story for the helper live in [deploy.md → Tunnel helper script](deploy.md#tunnel-helper-script).
+
+For one-off use without the helper, the raw equivalent is `ssh -L 5341:localhost:5341 <user>@<lightsail-host>`, then browse `http://localhost:5341` from the workstation.
 
 Admin password auth is enabled on first launch (single-user free tier — no per-user accounts). The password is stored in the operator's password manager; rotating it is a Seq UI operation, not a deploy.
 
