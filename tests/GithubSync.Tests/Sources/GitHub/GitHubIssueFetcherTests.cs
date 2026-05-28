@@ -498,6 +498,29 @@ public class GitHubIssueFetcherTests
         }
         """;
 
+    [Fact]
+    public async Task Cancellation_during_rate_limit_sleep_aborts_quickly()
+    {
+        using var server = new WireMockGitHubServer();
+        // Force a 30s Retry-After so the fetcher is mid-sleep when cancellation fires.
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(403).WithHeader("Retry-After", "30"));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in fetcher.FetchAsync("o", "r", null, cts.Token)) { }
+        });
+
+        sw.Stop();
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2),
+            $"Cancellation should be prompt; took {sw.Elapsed.TotalMilliseconds}ms");
+    }
+
     private static async Task<List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>> CollectAsync(
         global::GithubSync.Sources.GitHub.IGitHubIssueFetcher fetcher)
     {
