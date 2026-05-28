@@ -104,7 +104,7 @@ Admin password auth is enabled on first launch (single-user free tier — no per
 
 ### Retention
 
-Seq's free tier caps total stored event volume. The instance is configured for **30-day retention** via a retention policy in the Seq UI (**Data → Retention**, or `http://localhost:5341/#/retention` directly). The file sink remains at 14 days; Seq is the longer-window store for the rare back-investigation. If volume ever pushes against the free-tier cap before 30 days, drop the policy to whatever fits — the file sink covers the recent window regardless.
+Seq's free tier caps total stored event volume. The instance is configured for **30-day retention** via a retention policy in the Seq UI (**Data → Storage → Retention Policies**, or `http://localhost:5341/#/storage/retention/new` directly). The file sink remains at 14 days; Seq is the longer-window store for the rare back-investigation. If volume ever pushes against the free-tier cap before 30 days, drop the policy to whatever fits — the file sink covers the recent window regardless.
 
 ### Query recipes
 
