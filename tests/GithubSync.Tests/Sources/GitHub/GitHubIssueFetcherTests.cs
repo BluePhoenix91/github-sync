@@ -572,6 +572,46 @@ public class GitHubIssueFetcherTests
         }
         """;
 
+    [Fact]
+    public async Task Pre_flight_budget_wait_pauses_before_next_query()
+    {
+        using var server = new WireMockGitHubServer();
+        var resetAt = DateTimeOffset.UtcNow.AddSeconds(2).ToString("o");
+
+        // Page 1: hasNextPage=true, budget remaining=1 cost=100 -> forces pre-flight wait before page 2
+        var body1 = $$"""
+            {
+              "data": {
+                "repository": {
+                  "issues": {
+                    "pageInfo": { "endCursor": "next", "hasNextPage": true },
+                    "nodes": []
+                  }
+                },
+                "rateLimit": { "remaining": 1, "cost": 100, "resetAt": "{{resetAt}}", "limit": 5000 }
+              }
+            }
+            """;
+
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && !b.Contains("\"cursor\":\"next\"")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(body1));
+
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("\"cursor\":\"next\"")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(EmptyPageBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var events = await CollectAsync(fetcher);
+        sw.Stop();
+
+        Assert.Empty(events);
+        Assert.True(sw.Elapsed >= TimeSpan.FromMilliseconds(700),
+            $"Expected pre-flight wait of ~1s, took {sw.Elapsed.TotalMilliseconds}ms");
+    }
+
     private static async Task<List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>> CollectAsync(
         global::GithubSync.Sources.GitHub.IGitHubIssueFetcher fetcher)
     {
