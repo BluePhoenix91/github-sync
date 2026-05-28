@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\GithubSync.Api\GithubSync.Api.csproj" />
     <ProjectReference Include="..\..\src\GithubSync.Data\GithubSync.Data.csproj" />
+    <ProjectReference Include="..\..\src\GithubSync.Sources.GitHub\GithubSync.Sources.GitHub.csproj" />
   </ItemGroup>
 
 </Project>
