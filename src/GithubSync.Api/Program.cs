@@ -2,6 +2,7 @@ using GithubSync.Api.Startup;
 using GithubSync.Data;
 using GithubSync.Sources.GitHub;
 using Microsoft.EntityFrameworkCore;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -23,6 +24,15 @@ RequiredSecrets.Validate(
 
 app.MapAppHealthEndpoints();
 
-app.Run();
+try
+{
+    app.Run();
+}
+finally
+{
+    // Drains the Serilog.Sinks.Async buffer so events queued at shutdown
+    // reach the file sink before the process exits.
+    Log.CloseAndFlush();
+}
 
 public partial class Program;

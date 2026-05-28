@@ -88,17 +88,29 @@ jobs:
         run: |
           $filter = "system.applicationHost/applicationPools/add[@name='$env:APP_POOL']/environmentVariables"
 
-          $entries = @(
+          # Secrets — must be non-empty or the deploy fails before the pool starts.
+          $secrets = @(
             @{ Name = 'SENTRY_DSN';                Value = $env:SENTRY_DSN }
             @{ Name = 'GITHUB_TOKEN';              Value = $env:GH_API_TOKEN }
             @{ Name = 'ADO_PAT';                   Value = $env:ADO_PAT }
             @{ Name = 'ConnectionStrings__AppDb';  Value = $env:APP_DB_CONNECTION_STRING }
           )
 
-          $missing = $entries | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object { $_.Name }
+          $missing = $secrets | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object { $_.Name }
           if ($missing) {
             throw "Missing GitHub Actions secrets for: $($missing -join ', '). Configure them in Settings -> Secrets and variables -> Actions."
           }
+
+          # Non-secret config. Hardcoded here rather than a GitHub Actions variable:
+          # the value is operationally fixed (Seq is colocated on the box, loopback
+          # only), and keeping it in the workflow keeps the env-var set defined in
+          # one place. To disable the Seq sink, comment the SEQ_SERVER_URL line and
+          # redeploy — LoggingWiring no-ops on a blank value.
+          $config = @(
+            @{ Name = 'SEQ_SERVER_URL';            Value = 'http://localhost:5341' }
+          )
+
+          $entries = $secrets + $config
 
           Clear-WebConfiguration -pspath 'MACHINE/WEBROOT/APPHOST' -filter $filter
           foreach ($e in $entries) {

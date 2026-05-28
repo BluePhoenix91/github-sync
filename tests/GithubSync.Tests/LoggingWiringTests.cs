@@ -82,6 +82,51 @@ public class LoggingWiringTests
         Assert.True(root.TryGetProperty("Reason", out var reason) && reason.GetString() == "rate-limited", "Reason missing or wrong");
     }
 
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    [InlineData("http://localhost:5341", true)]
+    public void ShouldEnableSeq_requires_non_blank_url(string? url, bool expected)
+    {
+        Assert.Equal(expected, LoggingWiring.ShouldEnableSeq(url));
+    }
+
+    [Fact]
+    public void Async_wrapper_flushes_buffered_events_when_logger_is_disposed()
+    {
+        var tempPath = Path.Combine(Path.GetTempPath(), $"github-sync-async-flush-{Guid.NewGuid():N}.log");
+        try
+        {
+            var logger = new LoggerConfiguration()
+                .WriteTo.Async(a => a.File(
+                    formatter: new CompactJsonFormatter(),
+                    path: tempPath,
+                    shared: true),
+                    bufferSize: LoggingWiring.FileSinkAsyncBufferSize,
+                    blockWhenFull: false)
+                .CreateLogger();
+
+            logger.Information("buffered-event-{Marker}", "alpha");
+            logger.Information("buffered-event-{Marker}", "beta");
+
+            // Disposing the wrapper sink drains the queue to the inner file sink,
+            // which is what Log.CloseAndFlush() triggers on host shutdown.
+            logger.Dispose();
+
+            var content = File.ReadAllText(tempPath);
+            Assert.Contains("alpha", content);
+            Assert.Contains("beta", content);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
+    }
+
     internal static (ILogger<LoggingWiringTests> logger, CapturingSink sink) BuildTestLogger(string envName)
     {
         var env = new TestHostEnvironment(envName);
