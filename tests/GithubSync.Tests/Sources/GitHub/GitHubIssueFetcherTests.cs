@@ -205,6 +205,77 @@ public class GitHubIssueFetcherTests
         }
         """;
 
+    [Fact]
+    public async Task Outer_pagination_walks_two_pages_passing_endCursor_as_after()
+    {
+        using var server = new WireMockGitHubServer();
+
+        // Page 1: hasNextPage true, returns 1 issue
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && !b.Contains("\"cursor\":\"page2cursor\"")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(PaginationPage1));
+
+        // Page 2: cursor present, hasNextPage false
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("\"cursor\":\"page2cursor\"")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(PaginationPage2));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var events = await CollectAsync(fetcher);
+
+        // 2 issues across pages, each yielding only IssueOpened (no timeline content)
+        Assert.Equal(2, events.Count);
+        Assert.Equal(new[] { "1", "2" }, events.Select(e => e.SourceEntityId).ToArray());
+    }
+
+    private const string PaginationPage1 = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": "page2cursor", "hasNextPage": true },
+                "nodes": [
+                  {
+                    "id": "I_kw_1", "number": 1, "databaseId": 1, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z",
+                    "title": "first", "body": "b1",
+                    "author": { "login": "a", "databaseId": 1, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private const string PaginationPage2 = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": [
+                  {
+                    "id": "I_kw_2", "number": 2, "databaseId": 2, "createdAt": "2026-01-02T00:00:00Z", "updatedAt": "2026-01-02T00:00:00Z",
+                    "title": "second", "body": "b2",
+                    "author": { "login": "b", "databaseId": 2, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4998, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
     private static async Task<List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>> CollectAsync(
         global::GithubSync.Sources.GitHub.IGitHubIssueFetcher fetcher)
     {
