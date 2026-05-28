@@ -420,6 +420,80 @@ public class GitHubIssueFetcherTests
             $"Expected ~1s wait until reset, took {sw.Elapsed.TotalMilliseconds}ms");
     }
 
+    [Fact]
+    public async Task Transient_503_retries_then_succeeds()
+    {
+        using var server = new WireMockGitHubServer();
+        var scenario = "transient";
+
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario).WhenStateIs(null).WillSetStateTo("one")
+            .RespondWith(Response.Create().WithStatusCode(503));
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario).WhenStateIs("one").WillSetStateTo("two")
+            .RespondWith(Response.Create().WithStatusCode(503));
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .InScenario(scenario).WhenStateIs("two")
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(EmptyPageBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var events = await CollectAsync(fetcher);
+
+        Assert.Empty(events);
+        Assert.Equal(3, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
+    [Fact]
+    public async Task GraphQL_errors_body_throws_GitHubGraphQLException()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(GraphQLErrorBody));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        await Assert.ThrowsAsync<global::GithubSync.Sources.GitHub.Exceptions.GitHubGraphQLException>(
+            async () => await CollectAsync(fetcher));
+
+        Assert.Equal(1, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
+    [Fact]
+    public async Task Status_401_throws_GitHubAuthException_no_retry()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(401));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        await Assert.ThrowsAsync<global::GithubSync.Sources.GitHub.Exceptions.GitHubAuthException>(
+            async () => await CollectAsync(fetcher));
+        Assert.Equal(1, server.Server.LogEntries.Count(le => le.RequestMessage.Path == "/graphql"));
+    }
+
+    [Fact]
+    public async Task Status_403_without_rate_limit_signals_throws_GitHubAuthException()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(403));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+
+        await Assert.ThrowsAsync<global::GithubSync.Sources.GitHub.Exceptions.GitHubAuthException>(
+            async () => await CollectAsync(fetcher));
+    }
+
+    private const string GraphQLErrorBody = """
+        {
+          "data": null,
+          "errors": [
+            { "message": "Field 'foo' doesn't exist on type 'Repository'", "type": "FIELD_NOT_FOUND" }
+          ]
+        }
+        """;
+
     private static async Task<List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>> CollectAsync(
         global::GithubSync.Sources.GitHub.IGitHubIssueFetcher fetcher)
     {
