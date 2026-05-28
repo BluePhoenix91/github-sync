@@ -92,6 +92,41 @@ public class LoggingWiringTests
         Assert.Equal(expected, LoggingWiring.ShouldEnableSeq(url));
     }
 
+    [Fact]
+    public void Async_wrapper_flushes_buffered_events_when_logger_is_disposed()
+    {
+        var tempPath = Path.Combine(Path.GetTempPath(), $"github-sync-async-flush-{Guid.NewGuid():N}.log");
+        try
+        {
+            var logger = new LoggerConfiguration()
+                .WriteTo.Async(a => a.File(
+                    formatter: new CompactJsonFormatter(),
+                    path: tempPath,
+                    shared: true),
+                    bufferSize: LoggingWiring.FileSinkAsyncBufferSize,
+                    blockWhenFull: false)
+                .CreateLogger();
+
+            logger.Information("buffered-event-{Marker}", "alpha");
+            logger.Information("buffered-event-{Marker}", "beta");
+
+            // Disposing the wrapper sink drains the queue to the inner file sink,
+            // which is what Log.CloseAndFlush() triggers on host shutdown.
+            logger.Dispose();
+
+            var content = File.ReadAllText(tempPath);
+            Assert.Contains("alpha", content);
+            Assert.Contains("beta", content);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
+    }
+
     internal static (ILogger<LoggingWiringTests> logger, CapturingSink sink) BuildTestLogger(string envName)
     {
         var env = new TestHostEnvironment(envName);
