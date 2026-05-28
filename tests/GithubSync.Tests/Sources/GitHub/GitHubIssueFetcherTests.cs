@@ -427,7 +427,11 @@ public class GitHubIssueFetcherTests
         var scenario = "transient";
 
         server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
-            .InScenario(scenario).WhenStateIs(null).WillSetStateTo("one")
+            .InScenario(scenario)
+#pragma warning disable CS8625 // WireMock.Net WhenStateIs(null) is the documented API for "initial state"
+            .WhenStateIs(null)
+#pragma warning restore CS8625
+            .WillSetStateTo("one")
             .RespondWith(Response.Create().WithStatusCode(503));
         server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
             .InScenario(scenario).WhenStateIs("one").WillSetStateTo("two")
