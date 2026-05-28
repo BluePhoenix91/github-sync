@@ -50,7 +50,7 @@ internal sealed class GitHubGraphQLClient(HttpClient httpClient)
     private async Task<HttpResponseMessage> SendWithRateLimitRetryAsync(
         HttpRequestMessage request, CancellationToken ct)
     {
-        var response = await httpClient.SendAsync(CloneRequest(request), ct);
+        var response = await httpClient.SendAsync(await CloneRequestAsync(request, ct), ct);
         if (response.StatusCode != HttpStatusCode.Forbidden && response.StatusCode != HttpStatusCode.Unauthorized)
         {
             return response;
@@ -68,7 +68,7 @@ internal sealed class GitHubGraphQLClient(HttpClient httpClient)
             response.Dispose();
             await Task.Delay(wait, ct);
 
-            var retried = await httpClient.SendAsync(CloneRequest(request), ct);
+            var retried = await httpClient.SendAsync(await CloneRequestAsync(request, ct), ct);
             if (retried.StatusCode == HttpStatusCode.Forbidden)
             {
                 retried.Dispose();
@@ -114,13 +114,13 @@ internal sealed class GitHubGraphQLClient(HttpClient httpClient)
     }
 
     // HttpRequestMessage instances cannot be re-sent; clone for retry.
-    private static HttpRequestMessage CloneRequest(HttpRequestMessage source)
+    private static async Task<HttpRequestMessage> CloneRequestAsync(HttpRequestMessage source, CancellationToken ct)
     {
         var clone = new HttpRequestMessage(source.Method, source.RequestUri);
         if (source.Content is not null)
         {
             var ms = new MemoryStream();
-            source.Content.CopyToAsync(ms).GetAwaiter().GetResult();
+            await source.Content.CopyToAsync(ms, ct);
             ms.Position = 0;
             clone.Content = new StreamContent(ms);
             foreach (var h in source.Content.Headers)
