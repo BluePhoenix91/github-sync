@@ -16,6 +16,7 @@ public class GitHubIntegrationTests
         Skip.If(string.IsNullOrWhiteSpace(token) || runFlag != "true",
             "Integration tests require GITHUB_TOKEN and RUN_INTEGRATION_TESTS=true.");
 
+        // This test hits real GitHub, not WireMock — FetcherTestHarness overrides the base URL for stubs.
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {

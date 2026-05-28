@@ -1,6 +1,6 @@
 namespace GithubSync.Sources.GitHub;
 
-// Source-side event discriminator. Translated to GithubSync.Data.Enums.EventKind by the mapper (#12).
+// Source-side event discriminator. The mapper translates these into the canonical GithubSync.Data.Enums.EventKind.
 public enum GitHubEventKind
 {
     IssueOpened = 1,

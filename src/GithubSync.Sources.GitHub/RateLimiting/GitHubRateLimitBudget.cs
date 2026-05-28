@@ -2,7 +2,7 @@ namespace GithubSync.Sources.GitHub.RateLimiting;
 
 // Tracks GitHub GraphQL rate-limit budget across queries. Thread-safe for a single fetcher
 // instance — concurrent calls from multiple fetchers are not the v1 topology.
-public sealed class GitHubRateLimitBudget
+internal sealed class GitHubRateLimitBudget
 {
     private int _remaining = int.MaxValue;       // No observation yet -> assume plenty.
     private int _lastObservedCost = 1;

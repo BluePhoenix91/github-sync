@@ -85,15 +85,16 @@ internal sealed class GitHubGraphQLClient(HttpClient httpClient)
         HttpRequestMessage request, CancellationToken ct)
     {
         var response = await httpClient.SendAsync(await CloneRequestAsync(request, ct), ct);
-        if (response.StatusCode != HttpStatusCode.Forbidden && response.StatusCode != HttpStatusCode.Unauthorized)
-        {
-            return response;
-        }
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
             response.Dispose();
             throw new GitHubAuthException("GitHub returned 401 Unauthorized.");
+        }
+
+        if (response.StatusCode != HttpStatusCode.Forbidden)
+        {
+            return response;
         }
 
         // 403 — decide between rate limit and auth.

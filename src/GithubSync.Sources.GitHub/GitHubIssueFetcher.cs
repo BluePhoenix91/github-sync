@@ -12,13 +12,15 @@ internal sealed class GitHubIssueFetcher(
     GitHubRateLimitBudget budget,
     ILogger<GitHubIssueFetcher> logger) : IGitHubIssueFetcher
 {
+    private const string SourceName = "github";
+
     public async IAsyncEnumerable<GitHubIssueEvent> FetchAsync(
         string owner, string repo, DateTimeOffset? since,
         [EnumeratorCancellation] CancellationToken ct)
     {
         logger.LogInformation(
             "GitHub fetch started {Source} {Owner} {Repo} {Since}",
-            "github", owner, repo, since);
+            SourceName, owner, repo, since);
 
         var issuesYielded = 0;
         var eventsYielded = 0;
@@ -63,7 +65,7 @@ internal sealed class GitHubIssueFetcher(
 
         logger.LogInformation(
             "GitHub fetch completed {Source} {Owner} {Repo} {IssuesYielded} {EventsYielded} {DurationMs} {RateLimitRemaining}",
-            "github", owner, repo, issuesYielded, eventsYielded,
+            SourceName, owner, repo, issuesYielded, eventsYielded,
             (long)(DateTimeOffset.UtcNow - startedAt).TotalMilliseconds, lastRemaining);
     }
 
@@ -88,15 +90,15 @@ internal sealed class GitHubIssueFetcher(
 
         // 2. Body edits from the initial page.
         if (issue.UserContentEdits is { } edits)
-            events.AddRange(ExtractEditEvents(issue, edits.Nodes, since));
+            events.AddRange(ExtractEditEvents(sourceEntityId, issueUpdatedAt, edits.Nodes, since));
 
         // 3. Comments from the initial page.
         if (issue.Comments is { } comments)
-            events.AddRange(ExtractCommentEvents(issue, comments.Nodes, since));
+            events.AddRange(ExtractCommentEvents(sourceEntityId, issueUpdatedAt, comments.Nodes, since));
 
         // 4. Timeline items from the initial page.
         if (issue.TimelineItems is { } timeline)
-            events.AddRange(ExtractTimelineEvents(issue, timeline.Nodes, since));
+            events.AddRange(ExtractTimelineEvents(sourceEntityId, issueUpdatedAt, timeline.Nodes, since));
 
         // Within-issue: order by event time, then by SourceEventId for ties.
         events.Sort((a, b) =>
@@ -146,66 +148,89 @@ internal sealed class GitHubIssueFetcher(
         string owner, string repo, IssueNode issue, DateTimeOffset? since,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        // Timeline overflow
-        if (issue.TimelineItems is { PageInfo.HasNextPage: true, PageInfo.EndCursor: { } tCursor })
-        {
-            string? cursor = tCursor;
-            while (cursor is not null)
-            {
-                ct.ThrowIfCancellationRequested();
-                await budget.WaitIfLowAsync(ct);
-                var resp = await client.FollowUpTimelineAsync(owner, repo, issue.Number, cursor, ct);
-                if (resp.Data?.RateLimit is { } rl) budget.Update(rl.Remaining, rl.Cost, rl.ResetAt);
+        var sourceEntityId = issue.Number.ToString();
+        var issueUpdatedAt = issue.UpdatedAt;
 
-                var conn = resp.Data?.Repository?.Issue?.TimelineItems;
-                if (conn is null) break;
-                foreach (var ev in ExtractTimelineEvents(issue, conn.Nodes, since))
-                    yield return ev;
-                cursor = conn.PageInfo.HasNextPage ? conn.PageInfo.EndCursor : null;
+        if (issue.TimelineItems is { PageInfo: var tPage })
+        {
+            await foreach (var ev in DrainConnectionAsync(
+                tPage,
+                (cursor, c) => client.FollowUpTimelineAsync(owner, repo, issue.Number, cursor, c),
+                resp => resp.Data?.Repository?.Issue?.TimelineItems,
+                conn => ExtractTimelineEvents(sourceEntityId, issueUpdatedAt, conn.Nodes, since),
+                ct))
+            {
+                yield return ev;
             }
         }
 
-        // Comments overflow
-        if (issue.Comments is { PageInfo.HasNextPage: true, PageInfo.EndCursor: { } cCursor })
+        if (issue.Comments is { PageInfo: var cPage })
         {
-            string? cursor = cCursor;
-            while (cursor is not null)
+            await foreach (var ev in DrainConnectionAsync(
+                cPage,
+                (cursor, c) => client.FollowUpCommentsAsync(owner, repo, issue.Number, cursor, c),
+                resp => resp.Data?.Repository?.Issue?.Comments,
+                conn => ExtractCommentEvents(sourceEntityId, issueUpdatedAt, conn.Nodes, since),
+                ct))
             {
-                ct.ThrowIfCancellationRequested();
-                await budget.WaitIfLowAsync(ct);
-                var resp = await client.FollowUpCommentsAsync(owner, repo, issue.Number, cursor, ct);
-                if (resp.Data?.RateLimit is { } rl) budget.Update(rl.Remaining, rl.Cost, rl.ResetAt);
-
-                var conn = resp.Data?.Repository?.Issue?.Comments;
-                if (conn is null) break;
-                foreach (var ev in ExtractCommentEvents(issue, conn.Nodes, since))
-                    yield return ev;
-                cursor = conn.PageInfo.HasNextPage ? conn.PageInfo.EndCursor : null;
+                yield return ev;
             }
         }
 
-        // Body edits overflow
-        if (issue.UserContentEdits is { PageInfo.HasNextPage: true, PageInfo.EndCursor: { } eCursor })
+        if (issue.UserContentEdits is { PageInfo: var ePage })
         {
-            string? cursor = eCursor;
-            while (cursor is not null)
+            await foreach (var ev in DrainConnectionAsync(
+                ePage,
+                (cursor, c) => client.FollowUpEditsAsync(owner, repo, issue.Number, cursor, c),
+                resp => resp.Data?.Repository?.Issue?.UserContentEdits,
+                conn => ExtractEditEvents(sourceEntityId, issueUpdatedAt, conn.Nodes, since),
+                ct))
             {
-                ct.ThrowIfCancellationRequested();
-                await budget.WaitIfLowAsync(ct);
-                var resp = await client.FollowUpEditsAsync(owner, repo, issue.Number, cursor, ct);
-                if (resp.Data?.RateLimit is { } rl) budget.Update(rl.Remaining, rl.Cost, rl.ResetAt);
-
-                var conn = resp.Data?.Repository?.Issue?.UserContentEdits;
-                if (conn is null) break;
-                foreach (var ev in ExtractEditEvents(issue, conn.Nodes, since))
-                    yield return ev;
-                cursor = conn.PageInfo.HasNextPage ? conn.PageInfo.EndCursor : null;
+                yield return ev;
             }
         }
     }
 
+    private async IAsyncEnumerable<GitHubIssueEvent> DrainConnectionAsync<TConn>(
+        PageInfoDto initialPage,
+        Func<string, CancellationToken, Task<IssueFollowUpResponse>> fetchPage,
+        Func<IssueFollowUpResponse, TConn?> extractConnection,
+        Func<TConn, IEnumerable<GitHubIssueEvent>> extractEvents,
+        [EnumeratorCancellation] CancellationToken ct)
+        where TConn : class
+    {
+        if (!initialPage.HasNextPage || initialPage.EndCursor is not { } startCursor)
+            yield break;
+
+        string? cursor = startCursor;
+        while (cursor is not null)
+        {
+            ct.ThrowIfCancellationRequested();
+            await budget.WaitIfLowAsync(ct);
+
+            var resp = await fetchPage(cursor, ct);
+            if (resp.Data?.RateLimit is { } rl) budget.Update(rl.Remaining, rl.Cost, rl.ResetAt);
+
+            var conn = extractConnection(resp);
+            if (conn is null) break;
+
+            foreach (var ev in extractEvents(conn))
+                yield return ev;
+
+            // All three TConn types expose PageInfo via their first property; the extractor functions above
+            // return the same connection types whose PageInfo we read here using pattern matching.
+            cursor = conn switch
+            {
+                TimelineItemsConnection t => t.PageInfo.HasNextPage ? t.PageInfo.EndCursor : null,
+                CommentsConnection c => c.PageInfo.HasNextPage ? c.PageInfo.EndCursor : null,
+                EditsConnection e => e.PageInfo.HasNextPage ? e.PageInfo.EndCursor : null,
+                _ => null,
+            };
+        }
+    }
+
     private static IEnumerable<GitHubIssueEvent> ExtractTimelineEvents(
-        IssueNode issue, IReadOnlyList<TimelineItemNode> nodes, DateTimeOffset? since)
+        string sourceEntityId, DateTimeOffset issueUpdatedAt, IReadOnlyList<TimelineItemNode> nodes, DateTimeOffset? since)
     {
         foreach (var t in nodes)
         {
@@ -213,31 +238,31 @@ internal sealed class GitHubIssueFetcher(
             var kind = MapTimelineKind(t.TypeName);
             if (kind is null) continue;
             yield return new GitHubIssueEvent(
-                issue.Number.ToString(), t.Id, kind.Value, t.CreatedAt, issue.UpdatedAt,
+                sourceEntityId, t.Id, kind.Value, t.CreatedAt, issueUpdatedAt,
                 ToActor(t.Actor), JsonSerializer.Serialize(t));
         }
     }
 
     private static IEnumerable<GitHubIssueEvent> ExtractCommentEvents(
-        IssueNode issue, IReadOnlyList<CommentNode> nodes, DateTimeOffset? since)
+        string sourceEntityId, DateTimeOffset issueUpdatedAt, IReadOnlyList<CommentNode> nodes, DateTimeOffset? since)
     {
         foreach (var c in nodes)
         {
             if (since is not null && c.CreatedAt < since) continue;
             yield return new GitHubIssueEvent(
-                issue.Number.ToString(), c.Id, GitHubEventKind.Commented, c.CreatedAt, issue.UpdatedAt,
+                sourceEntityId, c.Id, GitHubEventKind.Commented, c.CreatedAt, issueUpdatedAt,
                 ToActor(c.Author), JsonSerializer.Serialize(c));
         }
     }
 
     private static IEnumerable<GitHubIssueEvent> ExtractEditEvents(
-        IssueNode issue, IReadOnlyList<UserContentEditNode> nodes, DateTimeOffset? since)
+        string sourceEntityId, DateTimeOffset issueUpdatedAt, IReadOnlyList<UserContentEditNode> nodes, DateTimeOffset? since)
     {
         foreach (var e in nodes)
         {
             if (since is not null && e.EditedAt < since) continue;
             yield return new GitHubIssueEvent(
-                issue.Number.ToString(), null, GitHubEventKind.BodyEdited, e.EditedAt, issue.UpdatedAt,
+                sourceEntityId, null, GitHubEventKind.BodyEdited, e.EditedAt, issueUpdatedAt,
                 ToActor(e.Editor), JsonSerializer.Serialize(e));
         }
     }

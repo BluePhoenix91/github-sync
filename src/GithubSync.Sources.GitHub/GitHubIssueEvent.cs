@@ -5,6 +5,6 @@ public sealed record GitHubIssueEvent(
     string? SourceEventId,         // GraphQL node id; null only for body edits — matches CanonicalEvent rule.
     GitHubEventKind Kind,
     DateTimeOffset EventTime,
-    DateTimeOffset IssueUpdatedAt, // Watermark hint — used by #13 to advance the cursor.
+    DateTimeOffset IssueUpdatedAt, // Watermark hint used by the persister to advance the cursor crash-safely.
     GitHubActor? Actor,            // Null for deleted-user / system / "ghost" actors. Not skipped.
     string PayloadJson);           // Raw GitHub payload slice for downstream mapping + persistence.
