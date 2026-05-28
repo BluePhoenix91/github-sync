@@ -390,7 +390,7 @@ The script is intentionally idempotent on the open side: if it sees something al
 
 ### Retention
 
-Configure a **30-day retention policy** in the Seq UI under **Settings → Retention** (delete events older than 30 days). The free tier caps total stored event volume; 30 days is the planned ceiling. If volume ever pushes against the cap before 30 days, drop the policy to whatever fits — the file sink's 14-day window remains the recent-history fallback regardless.
+Configure a **30-day retention policy** in the Seq UI under **Data → Retention** (or browse directly to `http://localhost:5341/#/retention` if the menu has moved again — Seq has shuffled this between **Settings** and **Data** across versions). Add a policy with the filter left blank (applies to all events) and "Delete events older than" set to 30 days. The free tier caps total stored event volume; 30 days is the planned ceiling. If volume ever pushes against the cap before 30 days, drop the policy to whatever fits — the file sink's 14-day window remains the recent-history fallback regardless.
 
 ### Backup and upgrade
 
