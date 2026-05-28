@@ -330,6 +330,178 @@ Structured logging conventions, field shape, and the grep recipe live in [docs/l
 
 If logs stop appearing on disk: check Sentry for events first — the Serilog Sentry sink is independent of the file sink, so Sentry being silent too narrows the cause to the app itself rather than the file system.
 
+## Seq
+
+[Seq](https://datalust.co/seq) is an **opt-in** structured log aggregator that sits alongside the file sink on the Lightsail box. Conventions, query recipes, and the runtime wiring rationale live in [docs/logging.md → Seq](logging.md#seq); this section captures the host-side install and operate steps.
+
+### Install
+
+1. Download the Seq Windows installer (single-user free tier) from <https://datalust.co/download>.
+2. Run as administrator. Accept the default install path (`C:\Program Files\Seq`) and the default storage path (`C:\ProgramData\Seq`). The installer registers Seq as a Windows service set to start automatically.
+3. On first launch, open `http://localhost:5341` from an RDP session on the host. Seq prompts to set the admin password — store it in the operator password manager. No additional user accounts are needed; the free tier is single-user.
+
+### Access — IIS reverse proxy on a restricted port
+
+Seq's listener stays bound to `http://localhost:5341` on the box. Operator access goes through a **separate IIS site** that reverse-proxies to it: `https://seq.bart.consulting:8443` → `http://localhost:5341`. Three defenses stack on that path:
+
+1. **Lightsail firewall** — port `8443` is open **only** to the operator home IP `81.244.122.234/32`. The main API's port `443` is unchanged.
+2. **IIS "IP and Domain Restrictions"** — second-layer allowlist on the Seq site, in case the Lightsail rule is ever loosened by accident.
+3. **Seq admin password** — Seq's own auth gate. Set on first launch.
+
+The rationale for going through the work of an IIS reverse proxy instead of an SSH tunnel: the Windows Lightsail box does **not** run an SSH server (admin access is RDP-only — see the deploy mechanism note at the top of `cd.yml`), so a tunnel would mean installing and exposing OpenSSH Server first, which is itself a new public surface. Standing up a dedicated, IP-restricted, password-gated HTTPS endpoint reuses the box's existing IIS + win-acme machinery and is bookmarkable.
+
+#### One-time setup on the host
+
+1. **Install IIS modules.** *Server Manager → Add Roles and Features → Web Server (IIS) → Web Server → Security* → tick **IP and Domain Restrictions**. Then install **URL Rewrite 2.1** and **Application Request Routing 3.0** by **downloading their MSIs directly** from <https://www.iis.net/downloads> (Web Platform Installer is retired and its links 404). ARR also requires **External Cache 1.1** — install it first if it isn't already, or the ARR install will fail silently with the icon never appearing in IIS Manager. After install, close IIS Manager fully and reopen (`inetmgr`) — ARR's icon only registers in a fresh Manager process.
+
+2. **Enable the ARR proxy.** *IIS Manager → server root → Application Request Routing Cache → Server Proxy Settings (right pane)* → tick **Enable proxy** → Apply. Defaults are fine (HTTP/1.1 pass-through, X-Forwarded-For preserved, 120 s timeout).
+
+3. **DNS.** Add an A record `seq.bart.consulting` → `15.237.68.235`. If the parent domain is on Cloudflare, set it to **DNS only** (gray cloud), not proxied — IIS needs the real client IP for the IP allowlist, and win-acme needs an unproxied HTTP-01 challenge path. Verify with `nslookup seq.bart.consulting` from your workstation before continuing.
+
+4. **Create the Seq site in IIS — HTTP-only initially.** *Sites → Add Website…*
+   - Site name: `seq`. App pool: `seq` (auto-created).
+   - Physical path: `C:\Azureflow-QA\seq` (create the empty folder first; matches the existing site-root convention on this box). It's a placeholder — the site only ever reverse-proxies.
+   - Binding type: **`http`** (not https — IIS refuses to save an HTTPS binding without a cert and we don't have one yet, so chicken-and-egg → defer until win-acme issues one).
+   - Port: `80`. Host name: `seq.bart.consulting`. IP: `All Unassigned`.
+   - After creation: Application Pools → `seq` → *Basic Settings…* → .NET CLR version: **No Managed Code**.
+
+5. **Issue the certificate via win-acme.** Run `wacs.exe` as administrator and walk through:
+   - **M** — Create certificate (full options).
+   - **2** — Manual input.
+   - Host: `seq.bart.consulting`. Friendly name: accept default.
+   - **4** — Single certificate.
+   - **1** — HTTP file-system validation. Path: accept the default (`C:\Azureflow-QA\seq`).
+   - **Copy default web.config before validation?** **y** — ACME challenge files have no file extension and the default static-content handler refuses them without an explicit MIME map.
+   - CSR / store: defaults (RSA, Windows Certificate Store).
+   - Installation step: **No (additional) installation steps** — we bind the cert manually so we control the port.
+   - Accept LE T&Cs. The HTTP-01 dance runs in ~10–20 seconds and the cert lands in the local machine's *WebHosting* store.
+
+   **If the validation fails with `403 Forbidden`,** the site's IP restriction (if you applied it before this step) is blocking Let's Encrypt's validation servers. Temporarily set *IP and Domain Restrictions → Edit Feature Settings → Allow for unspecified clients*, retry the win-acme prompt with `y`, then re-lock in step 9.
+
+6. **Add the HTTPS:8443 binding** using the new cert. *Sites → `seq` → Bindings… → Add…*: type `https`, port `8443`, host `seq.bart.consulting`, **Require Server Name Indication** ticked, SSL certificate `seq.bart.consulting`. This is the canonical operator-facing port.
+
+7. **Add the HTTPS:443 binding** for the short URL — same dialog, same options, port `443`. With SNI ticked, this coexists with the main API's `:443` binding (different host header → different site). Without SNI, you'd collide with the main API.
+
+8. **Open Windows Firewall for port 8443.** IIS only auto-opens `80`/`443` in Windows Defender Firewall; custom ports need an explicit rule:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "IIS Seq HTTPS 8443" -Direction Inbound -Protocol TCP -LocalPort 8443 -Action Allow
+   ```
+
+9. **Apply IP restrictions and the `.well-known` override.** *IIS Manager → `seq` site → IP Address and Domain Restrictions*:
+   - *Edit Feature Settings…* → **Deny** for unspecified clients.
+   - *Add Allow Entry…* → IP address `81.244.122.234`, mask blank.
+
+   Then create the path override so future win-acme renewals (every ~60 days) can still pass HTTP-01:
+
+   ```powershell
+   $p = "C:\Azureflow-QA\seq\.well-known\acme-challenge"
+   New-Item -ItemType Directory -Path $p -Force | Out-Null
+   @'
+   <?xml version="1.0" encoding="UTF-8"?>
+   <configuration>
+     <system.webServer>
+       <security>
+         <ipSecurity allowUnlisted="true" />
+       </security>
+       <staticContent>
+         <clear />
+         <mimeMap fileExtension="." mimeType="text/plain" />
+       </staticContent>
+     </system.webServer>
+   </configuration>
+   '@ | Set-Content -Path "$p\web.config" -Encoding UTF8
+   ```
+
+   The override lifts the site-wide deny **only** for `/.well-known/acme-challenge/`, and re-applies the extensionless-file MIME mapping so the token is served as `text/plain`.
+
+10. **Write the reverse-proxy `web.config`** at `C:\Azureflow-QA\seq\web.config`:
+
+    ```xml
+    <?xml version="1.0" encoding="UTF-8"?>
+    <configuration>
+      <system.webServer>
+        <rewrite>
+          <rules>
+            <rule name="Allow ACME challenge" stopProcessing="true">
+              <match url="^\.well-known/acme-challenge/.*$" />
+              <action type="None" />
+            </rule>
+            <rule name="Canonicalize to https://seq.bart.consulting:8443" stopProcessing="true">
+              <match url="(.*)" />
+              <conditions>
+                <add input="{SERVER_PORT}" pattern="^8443$" negate="true" />
+              </conditions>
+              <action type="Redirect" url="https://seq.bart.consulting:8443/{R:1}" redirectType="Permanent" />
+            </rule>
+            <rule name="Reverse proxy to Seq" stopProcessing="true">
+              <match url="(.*)" />
+              <action type="Rewrite" url="http://localhost:5341/{R:1}" />
+            </rule>
+          </rules>
+        </rewrite>
+      </system.webServer>
+    </configuration>
+    ```
+
+    Rule order matters: ACME pass-through first (so renewals work), then anything-not-`:8443` gets `301`'d to the canonical URL, then `:8443` traffic reverse-proxies to Seq. The rule on the parent path (deny by default) and the `.well-known/acme-challenge/web.config` override (allow) compose as expected.
+
+11. **Lightsail firewall.** Lightsail console → instance → *Networking → IPv4 Firewall → Add rule*: Application **Custom**, Protocol **TCP**, Port **8443**, Source **Restrict to IP address** = `81.244.122.234`. Save. (Port `443` and `80` are already open from the main API and don't need a separate rule for the Seq site — IIS routes them by host header.)
+
+After all eleven steps:
+
+| URL | Result |
+|---|---|
+| `http://seq.bart.consulting` | 301 → `https://seq.bart.consulting:8443` |
+| `https://seq.bart.consulting` | 301 → `https://seq.bart.consulting:8443` |
+| `https://seq.bart.consulting:8443` | Seq UI |
+| Any URL from a non-allowlisted IP | timeout (Lightsail firewall on `:8443`) or 403 (IIS on `:80` / `:443`) |
+
+#### Rotating the allowlist when your home IP changes
+
+Residential IPs rotate. Symptom: every URL above times out from home. Update **both** allowlists:
+
+1. Lightsail console → *Networking* → edit the `8443` rule → replace the IP.
+2. IIS Manager → `seq` site → *IP Address and Domain Restrictions* → edit the allow entry → replace the IP.
+
+Updating only one silently loses a defense layer.
+
+#### Port 80 sharing
+
+The main API already uses port 80 on the default site (kept around for win-acme HTTP-01 on the API hostname). IIS routes inbound 80 by the `Host` header, so the `seq` site's port-80 binding with host name `seq.bart.consulting` does not conflict — each binding's `Host` is matched independently. Same applies to port 443.
+
+### Wire the API to Seq
+
+CD writes `SEQ_SERVER_URL=http://localhost:5341` onto the `github-sync-api` app pool on every deploy — see the `$config` block in the "Configure app pool environment variables" step of [`cd.yml`](../.github/workflows/cd.yml). It is **not** a GitHub Actions secret (the value is operationally fixed; the box's loopback URL doesn't rotate) and **not** in `RequiredSecrets`. If it is ever unset — by commenting the line in `cd.yml` and redeploying — [`LoggingWiring`](../src/GithubSync.Api/Startup/LoggingWiring.cs) skips the Seq sink and the API logs to file + Sentry exactly as before. That's a supported state for temporarily turning Seq off, not a misconfiguration.
+
+Verifying after the next deploy:
+
+1. Wait for the CD run that includes the change to land.
+2. Hit any API endpoint (a `/healthz` probe is enough).
+3. In the Seq UI, search `ApplicationName = 'github-sync'`. Events should appear within seconds.
+
+### Retention
+
+Configure a **30-day retention policy** in the Seq UI under **Data → Storage → Retention Policies → Add** (or browse directly to `http://localhost:5341/#/storage/retention/new` if the menu has moved again — Seq has shuffled this between **Settings**, **Data → Retention**, and **Data → Storage** across versions). Set `After` to **30 days / 0 hours / 0 minutes** and leave `Remove` on **All events**. The free tier caps total stored event volume; 30 days is the planned ceiling. If volume ever pushes against the cap before 30 days, drop the policy to whatever fits — the file sink's 14-day window remains the recent-history fallback regardless.
+
+### Backup and upgrade
+
+Seq's data lives in `C:\ProgramData\Seq`. It is *not* part of the API deploy artifact and is not backed up by CD. If the box is rebuilt, Seq is a fresh install with no prior events — acceptable, since the file sink is the durable record. Upgrading Seq is a re-run of the installer; the data directory is preserved across upgrades.
+
+### Troubleshooting
+
+- **Browser hangs / times out on every URL:** your home IP has rotated. Check at <https://ifconfig.me> from your home connection, then update both the Lightsail firewall rule and the IIS IP allowlist (see "Rotating the allowlist" above). The from-the-box test (`https://seq.bart.consulting:8443` on the host itself) **also** times out because Lightsail's NAT hairpins — the box's outbound request to its own public IP arrives back at the firewall from the box, not from `81.244.122.234`, so the IP rule denies it. Use `Test-NetConnection -ComputerName localhost -Port 8443` on the host to confirm IIS is fine independently.
+- **`403 Forbidden` from IIS:** the Lightsail firewall let you through but IIS's IP restriction did not — the two allowlists are out of sync. Update the IIS rule to match the Lightsail one.
+- **`ERR_CONNECTION_RESET` in the browser:** the binding for that hostname+port doesn't exist on the `seq` site, so `http.sys` rejects the TLS handshake. Most often: the HTTPS:443 binding wasn't added, or **Require SNI** wasn't ticked on it (without SNI, IIS can't route the request to the `seq` site). Verify with `Get-WebBinding -Name seq` — should show three rows (http:80, https:443, https:8443) all with host `seq.bart.consulting`.
+- **`502 Bad Gateway` from IIS:** the reverse-proxy rule reached IIS but couldn't talk to Seq on `localhost:5341`. Confirm the Seq Windows service is running (`Get-Service Seq`).
+- **Browser loads Seq over plain HTTP without redirecting** (no `:8443` in the address bar): Chrome treats `seq.bart.consulting:8443` (no protocol) as HTTP because the port isn't `443`. Type the full `https://seq.bart.consulting:8443`, or just visit `https://seq.bart.consulting` and let the canonicalize rule redirect.
+- **HTTPS:443 loads Seq but the URL doesn't update to `:8443`:** the canonicalize rule isn't firing. Most likely `web.config` is on an older two-rule version that only redirects when `{HTTPS}=off`. Confirm the file has the three-rule version with the `{SERVER_PORT} != 8443` condition.
+- **`curl` against the URL works but the browser fails:** browser has a cached bad TLS state for the host from earlier failed attempts. In Chrome: `chrome://net-internals/#hsts` → *Delete domain security policies* → enter `seq.bart.consulting`. Or just test in incognito.
+- **"Niet beveiligd" / "Not secure" warning stays after a successful cert install:** the browser remembers an old override from when you clicked through a previous warning. Clear it via the site's *Cookies en sitegegevens* in the lock-icon popover, or reset site data under *chrome://settings/content/all*.
+- **win-acme renewal fails with `403`:** the `.well-known/acme-challenge/web.config` override (step 9) is missing or has been overwritten. Recreate it — without it the site-wide IP deny blocks Let's Encrypt's validation IPs.
+- **Seq UI loads but no `github-sync` events appear:** confirm `SEQ_SERVER_URL` is present on the `github-sync-api` app pool (`appcmd list apppool github-sync-api /text:*`) and the pool has been recycled since the env var was set.
+- **Sink errors in the API's log file:** `Serilog.Sinks.Seq` writes its own ingestion failures via Serilog's `SelfLog` (off by default). It buffers in memory if Seq is briefly down; sustained outages drop events at the sink — Sentry and the file sink are unaffected.
+
 ## HTTPS / certificate
 
 - **Edge cert** (seen by clients routed via Cloudflare): issued by Cloudflare automatically.

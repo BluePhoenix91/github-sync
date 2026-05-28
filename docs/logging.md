@@ -43,9 +43,10 @@ The skip-and-log convention from [CLAUDE.md](../CLAUDE.md) mandates the field na
 |---|---|---|
 | Development | `Console` | Human-readable, default Serilog template. |
 | Production | `File` — `C:\Azureflow-QA\GithubSync.API\logs\app-yyyyMMdd.log` | `CompactJsonFormatter` (CLEF) — one JSON line per event. |
+| Production (opt-in) | `Seq` — colocated on the box, accessed by operators at `https://seq.bart.consulting:8443` | Native CLEF over HTTP from the API to Seq's loopback listener; HTTPS + IP allowlist for the operator UI. Wired when the `SEQ_SERVER_URL` env var is set on the app pool. See [Seq](#seq) below. |
 | All environments | `Sentry` (via `Sentry.Serilog`) | Warnings/errors land as Sentry breadcrumbs; errors with exceptions land as Sentry events. |
 
-ASP.NET Core's IIS `stdoutLog` is intentionally disabled — `Serilog.Sinks.File` owns the rolling/retention story.
+ASP.NET Core's IIS `stdoutLog` is intentionally disabled — `Serilog.Sinks.File` owns the rolling/retention story. The Seq sink sits alongside the file sink — both receive every event — so losing Seq does not lose history.
 
 ## Rolling and retention
 
@@ -74,7 +75,57 @@ Get-ChildItem 'C:\Azureflow-QA\GithubSync.API\logs\app-*.log' `
   | Select-String '"Reason":"rate-limited"'
 ```
 
-Once `Select-String` becomes the bottleneck, follow-up issue [#53](https://github.com/BluePhoenix91/github-sync/issues/53) introduces a Seq instance on the box with a real query UI.
+Once `Select-String` becomes the bottleneck, switch to [Seq](#seq) for the same queries with a real UI.
+
+## Seq
+
+[Seq](https://datalust.co/seq) runs as a Windows service on the Lightsail host and receives the same events the file sink does, via [`Serilog.Sinks.Seq`](https://github.com/datalust/serilog-sinks-seq). It is **opt-in**: the sink is only wired when the `SEQ_SERVER_URL` env var is set on the `github-sync-api` app pool (typically `http://localhost:5341`). With the var unset, the API logs to file + Sentry only, exactly as before.
+
+### Why opt-in, not always-on
+
+The file sink alone is the durable record. Seq is for interactive investigations — installing it is a host-side operation ([deploy.md → Seq](deploy.md#seq)), and there's no reason to log to a sink that may not exist yet. `SEQ_SERVER_URL` is written onto the app pool by CD as plain config (not a secret — see [deploy.md → Wire the API to Seq](deploy.md#wire-the-api-to-seq)); toggling Seq off is a one-line edit in `cd.yml` plus a redeploy.
+
+### Access
+
+Seq listens on `http://localhost:5341` on the box. Operator access goes through a dedicated IIS reverse-proxy site at **`https://seq.bart.consulting:8443`**, with three layers gating it: a Lightsail-firewall IP allowlist on `:8443`, an IIS-level IP allowlist on the site, and Seq's own admin password. Host-side install and the allowlist-rotation procedure live in [deploy.md → Access — IIS reverse proxy on a restricted port](deploy.md#access--iis-reverse-proxy-on-a-restricted-port).
+
+Day-to-day: bookmark the URL. From the allowed IP, it loads; from anywhere else, it times out at AWS's edge.
+
+Admin password auth is enabled on first launch (single-user free tier — no per-user accounts). The password is stored in the operator's password manager; rotating it is a Seq UI operation, not a deploy.
+
+### Retention
+
+Seq's free tier caps total stored event volume. The instance is configured for **30-day retention** via a retention policy in the Seq UI (**Data → Storage → Retention Policies**, or `http://localhost:5341/#/storage/retention/new` directly). The file sink remains at 14 days; Seq is the longer-window store for the rare back-investigation. If volume ever pushes against the free-tier cap before 30 days, drop the policy to whatever fits — the file sink covers the recent window regardless.
+
+### Query recipes
+
+The same fields the [grep recipes](#grep-recipe) target are top-level properties in Seq. Equivalent queries in the Seq UI:
+
+```
+// All warnings from the GitHub source.
+Source = 'github' and @Level = 'Warning'
+
+// Specific external id.
+ExternalId = 'issue-456'
+
+// Rate-limit hits in the last seven days. (Time range goes in the UI's range picker.)
+Reason = 'rate-limited'
+
+// Single sync run.
+RunId = '<guid>'
+
+// Runs with non-zero dedup activity.
+Deduped > 0
+```
+
+### What runs where
+
+| Concern | File sink | Seq sink |
+|---|---|---|
+| Durability | Primary. 14-day rolling on disk. | Secondary. 30-day retention in the local Seq store. |
+| Querying | `Select-String` over JSON lines. | Seq UI's structured query language. |
+| Availability if Seq is down | Unaffected — events still hit disk + Sentry. | Buffered briefly in process memory, then dropped past the sink's buffer cap. |
+| Wired by | Always (non-Development). | Only when `SEQ_SERVER_URL` is set on the app pool. |
 
 ## PII rule
 
@@ -130,6 +181,5 @@ The same aggregate is captured as a Sentry **message at `Info` level** (not a tr
 
 ## Follow-ups
 
-- [#53](https://github.com/BluePhoenix91/github-sync/issues/53) — evaluate Seq self-hosted as a real log aggregator.
 - [#54](https://github.com/BluePhoenix91/github-sync/issues/54) — wrap the file sink in `Serilog.Sinks.Async` if write latency ever shows up on a profile.
 - [#55](https://github.com/BluePhoenix91/github-sync/issues/55) — disable IIS overlapped recycle on the `github-sync-api` app pool.
