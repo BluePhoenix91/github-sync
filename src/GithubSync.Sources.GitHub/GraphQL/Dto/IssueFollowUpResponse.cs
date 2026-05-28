@@ -14,7 +14,6 @@ internal sealed record IssueFollowUpRepository(
     [property: JsonPropertyName("issue")] IssueFollowUpIssue? Issue);
 
 internal sealed record IssueFollowUpIssue(
-    [property: JsonPropertyName("updatedAt")] DateTimeOffset UpdatedAt,
     [property: JsonPropertyName("timelineItems")] TimelineItemsConnection? TimelineItems,
     [property: JsonPropertyName("comments")] CommentsConnection? Comments,
     [property: JsonPropertyName("userContentEdits")] EditsConnection? UserContentEdits);

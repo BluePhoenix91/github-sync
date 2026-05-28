@@ -71,8 +71,6 @@ internal sealed class GitHubIssueFetcher(
     {
         var sourceEntityId = issue.Number.ToString();
         var issueUpdatedAt = issue.UpdatedAt;
-
-        // Build an event list, then sort by event time so within-issue ordering is stable.
         var events = new List<GitHubIssueEvent>(16);
 
         // 1. Synthesise IssueOpened from createdAt (if in window).
@@ -88,60 +86,19 @@ internal sealed class GitHubIssueFetcher(
                 PayloadJson: SerializeIssueOpenedPayload(issue)));
         }
 
-        // 2. Body edits.
+        // 2. Body edits from the initial page.
         if (issue.UserContentEdits is { } edits)
-        {
-            foreach (var edit in edits.Nodes)
-            {
-                if (since is not null && edit.EditedAt < since) continue;
-                events.Add(new GitHubIssueEvent(
-                    SourceEntityId: sourceEntityId,
-                    SourceEventId: null, // body edits do not carry a stable per-event ID we treat as canonical
-                    Kind: GitHubEventKind.BodyEdited,
-                    EventTime: edit.EditedAt,
-                    IssueUpdatedAt: issueUpdatedAt,
-                    Actor: ToActor(edit.Editor),
-                    PayloadJson: JsonSerializer.Serialize(edit)));
-            }
-        }
+            events.AddRange(ExtractEditEvents(issue, edits.Nodes, since));
 
-        // 3. Comments.
+        // 3. Comments from the initial page.
         if (issue.Comments is { } comments)
-        {
-            foreach (var c in comments.Nodes)
-            {
-                if (since is not null && c.CreatedAt < since) continue;
-                events.Add(new GitHubIssueEvent(
-                    SourceEntityId: sourceEntityId,
-                    SourceEventId: c.Id,
-                    Kind: GitHubEventKind.Commented,
-                    EventTime: c.CreatedAt,
-                    IssueUpdatedAt: issueUpdatedAt,
-                    Actor: ToActor(c.Author),
-                    PayloadJson: JsonSerializer.Serialize(c)));
-            }
-        }
+            events.AddRange(ExtractCommentEvents(issue, comments.Nodes, since));
 
-        // 4. Timeline items.
+        // 4. Timeline items from the initial page.
         if (issue.TimelineItems is { } timeline)
-        {
-            foreach (var t in timeline.Nodes)
-            {
-                if (since is not null && t.CreatedAt < since) continue;
-                var kind = MapTimelineKind(t.TypeName);
-                if (kind is null) continue; // skip unknown __typename — mapper handles unknown-canonical-kind logging later
-                events.Add(new GitHubIssueEvent(
-                    SourceEntityId: sourceEntityId,
-                    SourceEventId: t.Id,
-                    Kind: kind.Value,
-                    EventTime: t.CreatedAt,
-                    IssueUpdatedAt: issueUpdatedAt,
-                    Actor: ToActor(t.Actor),
-                    PayloadJson: JsonSerializer.Serialize(t)));
-            }
-        }
+            events.AddRange(ExtractTimelineEvents(issue, timeline.Nodes, since));
 
-        // Within-issue: order by event time, then by node id for ties.
+        // Within-issue: order by event time, then by SourceEventId for ties.
         events.Sort((a, b) =>
         {
             var c = a.EventTime.CompareTo(b.EventTime);

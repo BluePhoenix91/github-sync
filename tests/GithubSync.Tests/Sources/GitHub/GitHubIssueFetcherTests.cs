@@ -342,7 +342,6 @@ public class GitHubIssueFetcherTests
           "data": {
             "repository": {
               "issue": {
-                "updatedAt": "2026-01-01T01:00:00Z",
                 "timelineItems": {
                   "pageInfo": { "endCursor": null, "hasNextPage": false },
                   "nodes": [

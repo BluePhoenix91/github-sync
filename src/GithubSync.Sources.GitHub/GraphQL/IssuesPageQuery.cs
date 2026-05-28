@@ -53,7 +53,6 @@ internal static class IssuesPageQuery
         query IssueTimelineFollowUp($owner: String!, $repo: String!, $number: Int!, $cursor: String!) {
           repository(owner: $owner, name: $repo) {
             issue(number: $number) {
-              updatedAt
               timelineItems(first: 100, after: $cursor, itemTypes: [
                 LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT,
                 CLOSED_EVENT, REOPENED_EVENT, TYPED_EVENT, UNTYPED_EVENT,
@@ -84,7 +83,6 @@ internal static class IssuesPageQuery
         query IssueCommentsFollowUp($owner: String!, $repo: String!, $number: Int!, $cursor: String!) {
           repository(owner: $owner, name: $repo) {
             issue(number: $number) {
-              updatedAt
               comments(first: 100, after: $cursor) {
                 pageInfo { endCursor hasNextPage }
                 nodes { id databaseId createdAt body author { login databaseId __typename } }
@@ -99,7 +97,6 @@ internal static class IssuesPageQuery
         query IssueEditsFollowUp($owner: String!, $repo: String!, $number: Int!, $cursor: String!) {
           repository(owner: $owner, name: $repo) {
             issue(number: $number) {
-              updatedAt
               userContentEdits(first: 100, after: $cursor) {
                 pageInfo { endCursor hasNextPage }
                 nodes { id editedAt diff editor { login databaseId __typename } }
