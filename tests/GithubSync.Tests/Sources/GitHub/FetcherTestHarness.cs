@@ -3,6 +3,8 @@ using GithubSync.Sources.GitHub.GraphQL;
 using GithubSync.Sources.GitHub.RateLimiting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Serilog;
 
 namespace GithubSync.Tests.Sources.GitHub;
 
@@ -21,6 +23,32 @@ internal static class FetcherTestHarness
         services.AddLogging();
         services.AddGitHubSource(config);
         // Override base address to point at the WireMock URL.
+        services.AddHttpClient<GitHubGraphQLClient>(c =>
+        {
+            c.BaseAddress = new Uri(baseUrl);
+            c.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("github-sync/1.0");
+        });
+
+        var provider = services.BuildServiceProvider();
+        return provider.GetRequiredService<IGitHubIssueFetcher>();
+    }
+
+    public static IGitHubIssueFetcher BuildWithSink(string baseUrl, CapturingSink sink, string token = "test-token")
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [GitHubSourceServiceCollectionExtensions.TokenConfigKey] = token,
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging(b => b.AddSerilog(
+            new LoggerConfiguration().WriteTo.Sink(sink).CreateLogger(),
+            dispose: true));
+        services.AddGitHubSource(config);
         services.AddHttpClient<GitHubGraphQLClient>(c =>
         {
             c.BaseAddress = new Uri(baseUrl);

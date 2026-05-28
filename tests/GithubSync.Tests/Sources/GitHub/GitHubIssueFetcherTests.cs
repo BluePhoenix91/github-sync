@@ -612,6 +612,26 @@ public class GitHubIssueFetcherTests
             $"Expected pre-flight wait of ~1s, took {sw.Elapsed.TotalMilliseconds}ms");
     }
 
+    [Fact]
+    public async Task Logs_structured_start_and_end_events()
+    {
+        using var server = new WireMockGitHubServer();
+        server.Server.Given(Request.Create().UsingPost().WithPath("/graphql"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(EmptyPageBody));
+
+        var sink = new CapturingSink();
+        var fetcher = FetcherTestHarness.BuildWithSink(server.BaseUrl, sink);
+
+        await CollectAsync(fetcher);
+
+        var started = Assert.Single(sink.Events, r => r.RenderMessage().Contains("fetch started"));
+        var completed = Assert.Single(sink.Events, r => r.RenderMessage().Contains("fetch completed"));
+        Assert.Contains("github", started.Properties["Source"]?.ToString() ?? "");
+        Assert.Contains("octocat", started.Properties["Owner"]?.ToString() ?? "");
+        Assert.True(completed.Properties.ContainsKey("DurationMs"));
+        Assert.True(completed.Properties.ContainsKey("RateLimitRemaining"));
+    }
+
     private static async Task<List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>> CollectAsync(
         global::GithubSync.Sources.GitHub.IGitHubIssueFetcher fetcher)
     {
