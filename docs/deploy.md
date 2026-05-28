@@ -338,47 +338,65 @@ If logs stop appearing on disk: check Sentry for events first — the Serilog Se
 
 1. Download the Seq Windows installer (single-user free tier) from <https://datalust.co/download>.
 2. Run as administrator. Accept the default install path (`C:\Program Files\Seq`) and the default storage path (`C:\ProgramData\Seq`). The installer registers Seq as a Windows service set to start automatically.
-3. On first launch, open `http://localhost:5341` *on the host itself* (RDP or the SSH tunnel below). Seq prompts to set the admin password — store it in the operator password manager. No additional user accounts are needed; the free tier is single-user.
+3. On first launch, open `http://localhost:5341` from an RDP session on the host. Seq prompts to set the admin password — store it in the operator password manager. No additional user accounts are needed; the free tier is single-user.
 
-### Network
+### Access — IIS reverse proxy on a restricted port
 
-Seq listens on `http://localhost:5341` and is **not exposed publicly**. There is no IIS reverse-proxy rule, no Cloudflare hostname, no Cloudflare origin cert — `5341` stays closed at the Lightsail firewall and bound to loopback on the host. Operators reach the UI over an SSH tunnel:
+Seq's listener stays bound to `http://localhost:5341` on the box. Operator access goes through a **separate IIS site** that reverse-proxies to it: `https://seq.bart.consulting:8443` → `http://localhost:5341`. Three defenses stack on that path:
 
-```bash
-ssh -L 5341:localhost:5341 <user>@<lightsail-host>
-# then browse http://localhost:5341 from the workstation
-```
+1. **Lightsail firewall** — port `8443` is open **only** to the operator home IP `81.244.122.234/32`. The main API's port `443` is unchanged.
+2. **IIS "IP and Domain Restrictions"** — second-layer allowlist on the Seq site, in case the Lightsail rule is ever loosened by accident.
+3. **Seq admin password** — Seq's own auth gate. Set on first launch.
 
-Trade-off recorded: an IIS reverse-proxy rule + win-acme cert would let operators bookmark a real URL, but it would add one more public surface to keep patched and certificate-renewed. The SSH tunnel reuses access controls that already exist for the box — "who can read logs?" collapses to "who has SSH access?", one ACL instead of two. When someone leaves, removing their SSH key removes Seq access automatically.
+The rationale for going through the work of an IIS reverse proxy instead of an SSH tunnel: the Windows Lightsail box does **not** run an SSH server (admin access is RDP-only — see the deploy mechanism note at the top of `cd.yml`), so a tunnel would mean installing and exposing OpenSSH Server first, which is itself a new public surface. Standing up a dedicated, IP-restricted, password-gated HTTPS endpoint reuses the box's existing IIS + win-acme machinery and is bookmarkable.
 
-#### Tunnel helper script
+#### One-time setup on the host
 
-[`scripts/seq-tunnel.ps1`](../scripts/seq-tunnel.ps1) wraps the `ssh -fNL ...` invocation, opens the browser, and persists the background ssh PID so it can be stopped cleanly. Use it instead of typing the raw `ssh -L` form each time — same tunnel, fewer flags to remember.
+1. **Install IIS modules.** Open *Server Manager → Manage → Add Roles and Features* and add, under *Web Server (IIS) → Web Server → Security*: **IP and Domain Restrictions**. Then install **URL Rewrite 2.1** and **Application Request Routing 3.0** (the ARR install is what enables IIS to act as a reverse proxy) from <https://www.iis.net/downloads>.
+2. **Enable the ARR proxy.** In *IIS Manager → server root → Application Request Routing Cache → Server Proxy Settings*, tick **Enable proxy** and save.
+3. **DNS.** Add an A record for `seq.bart.consulting` → `15.237.68.235`. If the parent domain is on Cloudflare, set the record to **DNS only** (gray cloud), not proxied — this gives IIS the real client IP for the IP-restriction allowlist and lets win-acme do an HTTP-01 challenge on port 80.
+4. **Create the Seq site in IIS.**
+   - *Sites → Add Website…*: site name `seq`, app pool `seq` (auto-created, **No Managed Code**, ApplicationPoolIdentity), physical path `C:\inetpub\seq` (create an empty directory — it's only a placeholder, the site only ever reverse-proxies).
+   - Bindings: HTTPS, port `8443`, host name `seq.bart.consulting`. Leave the SSL certificate empty for now — win-acme installs it in step 6.
+   - Add a second binding on **HTTP port 80**, host name `seq.bart.consulting`, only used by win-acme's HTTP-01 challenge. (If port 80 is already serving the main API, see "Port 80 sharing" below.)
+5. **Allowlist your IP.** In IIS Manager → select the `seq` site → *IP Address and Domain Restrictions*:
+   - Right pane: *Edit Feature Settings…* → set **Access for unspecified clients** to **Deny**.
+   - *Add Allow Entry…* → IP address `81.244.122.234`, mask blank (single-host allow).
+6. **Issue the certificate.** Run win-acme (`wacs.exe`), pick the `seq` site, accept the HTTP-01 challenge defaults. win-acme installs the cert and binds it to the `8443` HTTPS binding automatically, and renews on its existing 60-day schedule.
+7. **Wire the reverse proxy.** Edit `C:\inetpub\seq\web.config` (create if missing):
 
-**One-time setup** on each operator workstation, in `~/.ssh/config` (or `%USERPROFILE%\.ssh\config` on Windows):
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <configuration>
+     <system.webServer>
+       <rewrite>
+         <rules>
+           <rule name="Reverse proxy to Seq" stopProcessing="true">
+             <match url="(.*)" />
+             <action type="Rewrite" url="http://localhost:5341/{R:1}" />
+           </rule>
+         </rules>
+       </rewrite>
+     </system.webServer>
+   </configuration>
+   ```
 
-```
-Host gh-sync-seq
-    HostName <lightsail-public-ip-or-dns>
-    User administrator
-    IdentityFile ~/.ssh/lightsail.pem
-    LocalForward 5341 localhost:5341
-    ServerAliveInterval 60
-```
+8. **Lightsail firewall.** Lightsail console → instance → *Networking* → *IPv4 Firewall* → *Add rule*: Application **Custom**, Protocol **TCP**, Port **8443**, Source **Restrict to IP address**, value `81.244.122.234`. Save.
 
-**Daily use:**
+After all eight steps, browse `https://seq.bart.consulting:8443` from your home connection — Seq UI loads. From anywhere else, the connection times out at the Lightsail firewall.
 
-```powershell
-# Open the tunnel and launch the Seq UI in the default browser.
-scripts/seq-tunnel.ps1 -SshAlias gh-sync-seq
+#### Rotating the allowlist when your home IP changes
 
-# When done — or before switching to a different host.
-scripts/seq-tunnel.ps1 -Stop
-```
+Residential IPs rotate. When that happens (symptom: the bookmark times out), update **both** allowlists:
 
-If the SSH config alias isn't set up, the script also accepts explicit args (`-SshHost`, `-User`, `-IdentityFile`). See the script's comment-based help (`Get-Help scripts/seq-tunnel.ps1 -Full`) for the full parameter list, including `-LocalPort` (when 5341 is already taken on the workstation) and `-NoBrowser` (when scripting against the tunnel instead of using the UI).
+1. Lightsail console → *Networking* → edit the `8443` rule, replace the IP.
+2. IIS Manager → `seq` site → *IP Address and Domain Restrictions* → edit the allow entry, replace the IP.
 
-The script is intentionally idempotent on the open side: if it sees something already listening on the local port, it assumes the tunnel is up and just opens the browser. It does **not** install OpenSSH, manage keys, or edit `~/.ssh/config` — those are operator-workstation concerns and out of scope for a tunnel helper.
+Defense in depth assumes both are in sync; updating only one silently loses a layer.
+
+#### Port 80 sharing
+
+The main API already uses port 80 on the default site (kept around for win-acme HTTP-01 on the API hostname). IIS routes inbound 80 by the `Host` header, so adding a second port-80 binding on the `seq` site with host name `seq.bart.consulting` does not conflict — each binding's `Host` is matched independently.
 
 ### Wire the API to Seq
 
@@ -400,6 +418,9 @@ Seq's data lives in `C:\ProgramData\Seq`. It is *not* part of the API deploy art
 
 ### Troubleshooting
 
+- **Browser hangs / times out on `https://seq.bart.consulting:8443`:** your home IP has likely rotated. Check the current IP from your home connection at <https://ifconfig.me>, then update both the Lightsail firewall rule and the IIS IP allowlist (see "Rotating the allowlist" above).
+- **`403 Forbidden` from IIS:** the Lightsail firewall let you through but IIS's IP restriction did not — the two allowlists are out of sync. Update the IIS rule to match the Lightsail one.
+- **`502 Bad Gateway` from IIS:** the reverse-proxy rule reached IIS but couldn't talk to Seq on `localhost:5341`. Confirm the Seq Windows service is running (`Get-Service Seq`).
 - **Seq UI loads but no `github-sync` events appear:** confirm `SEQ_SERVER_URL` is present on the `github-sync-api` app pool (`appcmd list apppool github-sync-api /text:*`) and the pool has been recycled since the env var was set.
 - **Sink errors in the API's log file:** `Serilog.Sinks.Seq` writes its own ingestion failures via Serilog's `SelfLog` (off by default). It buffers in memory if Seq is briefly down; sustained outages drop events at the sink — Sentry and the file sink are unaffected.
 

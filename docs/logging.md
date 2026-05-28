@@ -43,7 +43,7 @@ The skip-and-log convention from [CLAUDE.md](../CLAUDE.md) mandates the field na
 |---|---|---|
 | Development | `Console` | Human-readable, default Serilog template. |
 | Production | `File` — `C:\Azureflow-QA\GithubSync.API\logs\app-yyyyMMdd.log` | `CompactJsonFormatter` (CLEF) — one JSON line per event. |
-| Production (opt-in) | `Seq` — local instance at `http://localhost:5341` | Native CLEF over HTTP. Wired when the `SEQ_SERVER_URL` env var is set on the app pool. See [Seq](#seq) below. |
+| Production (opt-in) | `Seq` — colocated on the box, accessed by operators at `https://seq.bart.consulting:8443` | Native CLEF over HTTP from the API to Seq's loopback listener; HTTPS + IP allowlist for the operator UI. Wired when the `SEQ_SERVER_URL` env var is set on the app pool. See [Seq](#seq) below. |
 | All environments | `Sentry` (via `Sentry.Serilog`) | Warnings/errors land as Sentry breadcrumbs; errors with exceptions land as Sentry events. |
 
 ASP.NET Core's IIS `stdoutLog` is intentionally disabled — `Serilog.Sinks.File` owns the rolling/retention story. The Seq sink sits alongside the file sink — both receive every event — so losing Seq does not lose history.
@@ -87,18 +87,9 @@ The file sink alone is the durable record. Seq is for interactive investigations
 
 ### Access
 
-The Seq UI listens on `http://localhost:5341` and is **not exposed publicly** — no IIS reverse-proxy rule, no Cloudflare hostname, no inbound firewall opening for port `5341`. Reach it over an SSH tunnel.
+Seq listens on `http://localhost:5341` on the box. Operator access goes through a dedicated IIS reverse-proxy site at **`https://seq.bart.consulting:8443`**, with three layers gating it: a Lightsail-firewall IP allowlist on `:8443`, an IIS-level IP allowlist on the site, and Seq's own admin password. Host-side install and the allowlist-rotation procedure live in [deploy.md → Access — IIS reverse proxy on a restricted port](deploy.md#access--iis-reverse-proxy-on-a-restricted-port).
 
-The recommended path is the [`scripts/seq-tunnel.ps1`](../scripts/seq-tunnel.ps1) helper:
-
-```powershell
-scripts/seq-tunnel.ps1 -SshAlias gh-sync-seq    # tunnel up + browser opens
-scripts/seq-tunnel.ps1 -Stop                    # tunnel down
-```
-
-Setup of the `gh-sync-seq` SSH config alias and the full operate/troubleshoot story for the helper live in [deploy.md → Tunnel helper script](deploy.md#tunnel-helper-script).
-
-For one-off use without the helper, the raw equivalent is `ssh -L 5341:localhost:5341 <user>@<lightsail-host>`, then browse `http://localhost:5341` from the workstation.
+Day-to-day: bookmark the URL. From the allowed IP, it loads; from anywhere else, it times out at AWS's edge.
 
 Admin password auth is enabled on first launch (single-user free tier — no per-user accounts). The password is stored in the operator's password manager; rotating it is a Seq UI operation, not a deploy.
 
