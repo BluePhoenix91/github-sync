@@ -276,6 +276,87 @@ public class GitHubIssueFetcherTests
         }
         """;
 
+    [Fact]
+    public async Task Inner_pagination_follow_up_drains_overflowing_timeline()
+    {
+        using var server = new WireMockGitHubServer();
+
+        // Outer query: 1 issue with timeline.hasNextPage = true, endCursor = "t-cursor"
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("IssuesPage")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(OuterWithOverflow));
+
+        // Follow-up timeline: hasNextPage = false, returns one more event
+        server.Server
+            .Given(Request.Create().UsingPost().WithPath("/graphql")
+                .WithBody(b => b is not null && b.Contains("IssueTimelineFollowUp")))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(FollowUpTimeline));
+
+        var fetcher = FetcherTestHarness.Build(server.BaseUrl);
+        var events = await CollectAsync(fetcher);
+
+        // Expected: IssueOpened + initial LabeledEvent + follow-up ClosedEvent = 3 events
+        Assert.Equal(3, events.Count);
+        Assert.Contains(events, e => e.Kind == global::GithubSync.Sources.GitHub.GitHubEventKind.Closed);
+
+        // Verify the follow-up query was called exactly once
+        var followUps = server.Server.LogEntries
+            .Count(le => le.RequestMessage.Body?.Contains("IssueTimelineFollowUp") == true);
+        Assert.Equal(1, followUps);
+    }
+
+    private const string OuterWithOverflow = """
+        {
+          "data": {
+            "repository": {
+              "issues": {
+                "pageInfo": { "endCursor": null, "hasNextPage": false },
+                "nodes": [
+                  {
+                    "id": "I_kw_77", "number": 77, "databaseId": 77,
+                    "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T01:00:00Z",
+                    "title": "long-running", "body": "issue 77",
+                    "author": { "login": "x", "databaseId": 1, "__typename": "User" },
+                    "userContentEdits": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "comments": { "pageInfo": { "endCursor": null, "hasNextPage": false }, "nodes": [] },
+                    "timelineItems": {
+                      "pageInfo": { "endCursor": "t-cursor", "hasNextPage": true },
+                      "nodes": [
+                        { "__typename": "LabeledEvent", "id": "LE_X", "createdAt": "2026-01-01T00:30:00Z",
+                          "actor": { "login": "x", "databaseId": 1, "__typename": "User" },
+                          "label": { "name": "bug" } }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "rateLimit": { "remaining": 4999, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
+    private const string FollowUpTimeline = """
+        {
+          "data": {
+            "repository": {
+              "issue": {
+                "updatedAt": "2026-01-01T01:00:00Z",
+                "timelineItems": {
+                  "pageInfo": { "endCursor": null, "hasNextPage": false },
+                  "nodes": [
+                    { "__typename": "ClosedEvent", "id": "CE_X", "createdAt": "2026-01-01T01:00:00Z",
+                      "actor": { "login": "x", "databaseId": 1, "__typename": "User" } }
+                  ]
+                }
+              }
+            },
+            "rateLimit": { "remaining": 4998, "cost": 1, "resetAt": "2026-01-01T01:00:00Z", "limit": 5000 }
+          }
+        }
+        """;
+
     private static async Task<List<global::GithubSync.Sources.GitHub.GitHubIssueEvent>> CollectAsync(
         global::GithubSync.Sources.GitHub.IGitHubIssueFetcher fetcher)
     {

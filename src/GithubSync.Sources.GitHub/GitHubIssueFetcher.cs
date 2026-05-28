@@ -49,6 +49,12 @@ internal sealed class GitHubIssueFetcher(
                     eventsYielded++;
                     yield return ev;
                 }
+
+                await foreach (var ev in DrainOverflowingConnectionsAsync(owner, repo, issue, since, ct))
+                {
+                    eventsYielded++;
+                    yield return ev;
+                }
             }
 
             if (!issues.PageInfo.HasNextPage) break;
@@ -178,4 +184,104 @@ internal sealed class GitHubIssueFetcher(
         "ParentIssueRemovedEvent" => GitHubEventKind.ParentRemoved,
         _ => null,
     };
+
+    private async IAsyncEnumerable<GitHubIssueEvent> DrainOverflowingConnectionsAsync(
+        string owner, string repo, IssueNode issue, DateTimeOffset? since,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        // Timeline overflow
+        if (issue.TimelineItems is { PageInfo.HasNextPage: true, PageInfo.EndCursor: { } tCursor })
+        {
+            string? cursor = tCursor;
+            while (cursor is not null)
+            {
+                ct.ThrowIfCancellationRequested();
+                await budget.WaitIfLowAsync(ct);
+                var resp = await client.FollowUpTimelineAsync(owner, repo, issue.Number, cursor, ct);
+                if (resp.Data?.RateLimit is { } rl) budget.Update(rl.Remaining, rl.Cost, rl.ResetAt);
+
+                var conn = resp.Data?.Repository?.Issue?.TimelineItems;
+                if (conn is null) break;
+                foreach (var ev in ExtractTimelineEvents(issue, conn.Nodes, since))
+                    yield return ev;
+                cursor = conn.PageInfo.HasNextPage ? conn.PageInfo.EndCursor : null;
+            }
+        }
+
+        // Comments overflow
+        if (issue.Comments is { PageInfo.HasNextPage: true, PageInfo.EndCursor: { } cCursor })
+        {
+            string? cursor = cCursor;
+            while (cursor is not null)
+            {
+                ct.ThrowIfCancellationRequested();
+                await budget.WaitIfLowAsync(ct);
+                var resp = await client.FollowUpCommentsAsync(owner, repo, issue.Number, cursor, ct);
+                if (resp.Data?.RateLimit is { } rl) budget.Update(rl.Remaining, rl.Cost, rl.ResetAt);
+
+                var conn = resp.Data?.Repository?.Issue?.Comments;
+                if (conn is null) break;
+                foreach (var ev in ExtractCommentEvents(issue, conn.Nodes, since))
+                    yield return ev;
+                cursor = conn.PageInfo.HasNextPage ? conn.PageInfo.EndCursor : null;
+            }
+        }
+
+        // Body edits overflow
+        if (issue.UserContentEdits is { PageInfo.HasNextPage: true, PageInfo.EndCursor: { } eCursor })
+        {
+            string? cursor = eCursor;
+            while (cursor is not null)
+            {
+                ct.ThrowIfCancellationRequested();
+                await budget.WaitIfLowAsync(ct);
+                var resp = await client.FollowUpEditsAsync(owner, repo, issue.Number, cursor, ct);
+                if (resp.Data?.RateLimit is { } rl) budget.Update(rl.Remaining, rl.Cost, rl.ResetAt);
+
+                var conn = resp.Data?.Repository?.Issue?.UserContentEdits;
+                if (conn is null) break;
+                foreach (var ev in ExtractEditEvents(issue, conn.Nodes, since))
+                    yield return ev;
+                cursor = conn.PageInfo.HasNextPage ? conn.PageInfo.EndCursor : null;
+            }
+        }
+    }
+
+    private static IEnumerable<GitHubIssueEvent> ExtractTimelineEvents(
+        IssueNode issue, IReadOnlyList<TimelineItemNode> nodes, DateTimeOffset? since)
+    {
+        foreach (var t in nodes)
+        {
+            if (since is not null && t.CreatedAt < since) continue;
+            var kind = MapTimelineKind(t.TypeName);
+            if (kind is null) continue;
+            yield return new GitHubIssueEvent(
+                issue.Number.ToString(), t.Id, kind.Value, t.CreatedAt, issue.UpdatedAt,
+                ToActor(t.Actor), JsonSerializer.Serialize(t));
+        }
+    }
+
+    private static IEnumerable<GitHubIssueEvent> ExtractCommentEvents(
+        IssueNode issue, IReadOnlyList<CommentNode> nodes, DateTimeOffset? since)
+    {
+        foreach (var c in nodes)
+        {
+            if (since is not null && c.CreatedAt < since) continue;
+            yield return new GitHubIssueEvent(
+                issue.Number.ToString(), c.Id, GitHubEventKind.Commented, c.CreatedAt, issue.UpdatedAt,
+                ToActor(c.Author), JsonSerializer.Serialize(c));
+        }
+    }
+
+    private static IEnumerable<GitHubIssueEvent> ExtractEditEvents(
+        IssueNode issue, IReadOnlyList<UserContentEditNode> nodes, DateTimeOffset? since)
+    {
+        foreach (var e in nodes)
+        {
+            if (since is not null && e.EditedAt < since) continue;
+            yield return new GitHubIssueEvent(
+                issue.Number.ToString(), null, GitHubEventKind.BodyEdited, e.EditedAt, issue.UpdatedAt,
+                ToActor(e.Editor), JsonSerializer.Serialize(e));
+        }
+    }
 }

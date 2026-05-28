@@ -47,4 +47,66 @@ internal static class IssuesPageQuery
           rateLimit { remaining cost resetAt limit }
         }
         """;
+
+    // Per-issue follow-up: drains the timelineItems connection for one issue from the given cursor.
+    public const string IssueTimelineFollowUp = """
+        query IssueTimelineFollowUp($owner: String!, $repo: String!, $number: Int!, $cursor: String!) {
+          repository(owner: $owner, name: $repo) {
+            issue(number: $number) {
+              updatedAt
+              timelineItems(first: 100, after: $cursor, itemTypes: [
+                LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT,
+                CLOSED_EVENT, REOPENED_EVENT, TYPED_EVENT, UNTYPED_EVENT,
+                PARENT_ISSUE_ADDED_EVENT, PARENT_ISSUE_REMOVED_EVENT
+              ]) {
+                pageInfo { endCursor hasNextPage }
+                nodes {
+                  __typename
+                  ... on LabeledEvent   { id createdAt actor { login databaseId __typename } label { name } }
+                  ... on UnlabeledEvent { id createdAt actor { login databaseId __typename } label { name } }
+                  ... on AssignedEvent   { id createdAt actor { login databaseId __typename } assignee { ... on User { login databaseId } } }
+                  ... on UnassignedEvent { id createdAt actor { login databaseId __typename } assignee { ... on User { login databaseId } } }
+                  ... on ClosedEvent     { id createdAt actor { login databaseId __typename } }
+                  ... on ReopenedEvent   { id createdAt actor { login databaseId __typename } }
+                  ... on TypedEvent      { id createdAt actor { login databaseId __typename } issueType { name } }
+                  ... on UntypedEvent    { id createdAt actor { login databaseId __typename } prevIssueType { name } }
+                  ... on ParentIssueAddedEvent   { id createdAt actor { login databaseId __typename } parent { number } }
+                  ... on ParentIssueRemovedEvent { id createdAt actor { login databaseId __typename } parent { number } }
+                }
+              }
+            }
+          }
+          rateLimit { remaining cost resetAt limit }
+        }
+        """;
+
+    public const string IssueCommentsFollowUp = """
+        query IssueCommentsFollowUp($owner: String!, $repo: String!, $number: Int!, $cursor: String!) {
+          repository(owner: $owner, name: $repo) {
+            issue(number: $number) {
+              updatedAt
+              comments(first: 100, after: $cursor) {
+                pageInfo { endCursor hasNextPage }
+                nodes { id databaseId createdAt body author { login databaseId __typename } }
+              }
+            }
+          }
+          rateLimit { remaining cost resetAt limit }
+        }
+        """;
+
+    public const string IssueEditsFollowUp = """
+        query IssueEditsFollowUp($owner: String!, $repo: String!, $number: Int!, $cursor: String!) {
+          repository(owner: $owner, name: $repo) {
+            issue(number: $number) {
+              updatedAt
+              userContentEdits(first: 100, after: $cursor) {
+                pageInfo { endCursor hasNextPage }
+                nodes { id editedAt diff editor { login databaseId __typename } }
+              }
+            }
+          }
+          rateLimit { remaining cost resetAt limit }
+        }
+        """;
 }

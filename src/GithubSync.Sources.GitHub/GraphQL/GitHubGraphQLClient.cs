@@ -44,6 +44,40 @@ internal sealed class GitHubGraphQLClient(HttpClient httpClient)
         return payload;
     }
 
+    public Task<IssueFollowUpResponse> FollowUpTimelineAsync(
+        string owner, string repo, int number, string cursor, CancellationToken ct) =>
+        FollowUpAsync(IssuesPageQuery.IssueTimelineFollowUp, owner, repo, number, cursor, ct);
+
+    public Task<IssueFollowUpResponse> FollowUpCommentsAsync(
+        string owner, string repo, int number, string cursor, CancellationToken ct) =>
+        FollowUpAsync(IssuesPageQuery.IssueCommentsFollowUp, owner, repo, number, cursor, ct);
+
+    public Task<IssueFollowUpResponse> FollowUpEditsAsync(
+        string owner, string repo, int number, string cursor, CancellationToken ct) =>
+        FollowUpAsync(IssuesPageQuery.IssueEditsFollowUp, owner, repo, number, cursor, ct);
+
+    private async Task<IssueFollowUpResponse> FollowUpAsync(
+        string query, string owner, string repo, int number, string cursor, CancellationToken ct)
+    {
+        var body = new
+        {
+            query,
+            variables = new { owner, repo, number, cursor },
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/graphql")
+        {
+            Content = JsonContent.Create(body),
+        };
+        using var response = await SendWithRateLimitRetryAsync(request, ct);
+
+        var payload = await response.Content.ReadFromJsonAsync<IssueFollowUpResponse>(JsonOptions, ct)
+            ?? throw new GitHubGraphQLException(["empty follow-up response body"]);
+        if (payload.Errors is { Count: > 0 } errs)
+            throw new GitHubGraphQLException(errs.Select(e => e.Message).ToList());
+        return payload;
+    }
+
     // Sends the request through the HttpClient (Polly handles 5xx transient retries).
     // Adds a one-shot retry for 403 rate-limit signals (Retry-After OR X-RateLimit-Remaining=0 + Reset).
     // Throws GitHubAuthException for 401 and for 403 with no rate-limit header signal.
