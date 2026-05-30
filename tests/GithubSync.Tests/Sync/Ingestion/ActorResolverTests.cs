@@ -37,6 +37,9 @@ public class ActorResolverTests
     public async Task New_actor_with_configured_mapping_creates_actor_and_configured_identity_mapping()
     {
         await using var db = NewDb();
+        db.TargetUsers.Add(NewTargetUser("octo@ado", "Octo Cat"));
+        await db.SaveChangesAsync();
+
         var resolver = NewResolver(db, configured: OptionsWith(
             new ConfiguredIdentityMapping { GitHubLogin = "octocat", TargetUserId = "octo@ado", TargetUserDisplayName = "Octo Cat" }));
         var actor = new GitHubActor("octocat", "1", GitHubActorKind.User);
@@ -55,6 +58,44 @@ public class ActorResolverTests
         Assert.Equal(MappingSource.Configured, mapping.MappingSource);
         Assert.Equal("octo@ado", mapping.TargetUserId);
         Assert.Equal("Octo Cat", mapping.TargetUserDisplayName);
+    }
+
+    [Fact]
+    public async Task Configured_mapping_referencing_unknown_TargetUserId_throws()
+    {
+        await using var db = NewDb();
+        // No TargetUsers seeded — the configured TargetUserId "ghost@ado" is not in the pool.
+        var resolver = NewResolver(db, configured: OptionsWith(
+            new ConfiguredIdentityMapping { GitHubLogin = "octocat", TargetUserId = "ghost@ado", TargetUserDisplayName = "Ghost" }));
+        var actor = new GitHubActor("octocat", "1", GitHubActorKind.User);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await resolver.ResolveAsync(actor, default));
+
+        Assert.Contains("octocat", ex.Message);
+        Assert.Contains("ghost@ado", ex.Message);
+    }
+
+    [Fact]
+    public async Task Configured_mapping_accepts_disabled_TargetUser_when_present_in_pool()
+    {
+        // Configured mapping is admin intent — disabled status doesn't block it (disabled is
+        // honoured by least-loaded selection, not by configured assignment).
+        await using var db = NewDb();
+        db.TargetUsers.Add(NewTargetUser("octo@ado", "Octo Cat", enabled: false));
+        await db.SaveChangesAsync();
+
+        var resolver = NewResolver(db, configured: OptionsWith(
+            new ConfiguredIdentityMapping { GitHubLogin = "octocat", TargetUserId = "octo@ado", TargetUserDisplayName = "Octo Cat" }));
+        var actor = new GitHubActor("octocat", "1", GitHubActorKind.User);
+
+        var actorId = await resolver.ResolveAsync(actor, default);
+        await db.SaveChangesAsync();
+
+        Assert.NotNull(actorId);
+        var mapping = Assert.Single(db.IdentityMappings);
+        Assert.Equal("octo@ado", mapping.TargetUserId);
+        Assert.Equal(MappingSource.Configured, mapping.MappingSource);
     }
 
     [Fact]
@@ -195,6 +236,9 @@ public class ActorResolverTests
     public async Task Configured_lookup_is_case_insensitive_on_GitHub_login()
     {
         await using var db = NewDb();
+        db.TargetUsers.Add(NewTargetUser("octo@ado", "Octo"));
+        await db.SaveChangesAsync();
+
         var resolver = NewResolver(db, configured: OptionsWith(
             new ConfiguredIdentityMapping { GitHubLogin = "Octocat", TargetUserId = "octo@ado", TargetUserDisplayName = "Octo" }));
         var actor = new GitHubActor("OCTOCAT", "1", GitHubActorKind.User);

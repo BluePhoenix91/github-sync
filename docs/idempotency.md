@@ -73,6 +73,8 @@ CLAUDE.md's skip-and-log rule still applies to **unexpected** per-row failures d
 
 Refresh `LastSeenAt`, `SourceActorLogin`, `DisplayName` on every sight. GitHub logins can change (`SourceActorId` is the stable join key per `data-model.md`); display names change more often. We want the latest cached values without losing the row's identity. `FirstSeenAt` is never overwritten.
 
+**v1 limitation:** `DisplayName` is not refreshed today because the GitHub fetcher's `GitHubActor` DTO does not surface it. The column stays nullable and only gets populated once the source side starts emitting display names. Tracked as a follow-up.
+
 ### `IdentityMapping` — insert-once
 
 The mapping row records *how this actor was resolved* (configured vs. least-loaded fallback) and *which target user owns the assignment*. Replacing an existing row on re-resolution would defeat the "persistent so least-loaded fallback assignments stay stable across runs" guarantee from `data-model.md`. On attempted re-insert: treat the existing row as authoritative and skip silently. Operator-driven re-mapping is an explicit out-of-band action, not an automatic resolution side-effect.

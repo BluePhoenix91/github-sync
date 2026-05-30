@@ -48,6 +48,9 @@ public class ActorResolver(
             return cached;
         }
 
+        // CanonicalActor.DisplayName is intentionally not refreshed here even though
+        // docs/idempotency.md lists it as a per-sight field. The source-side GitHubActor DTO
+        // doesn't carry a display name today; revisit once the fetcher surfaces it.
         var existing = await db.CanonicalActors
             .FirstOrDefaultAsync(a => a.Source == Source.GitHub && a.SourceActorId == actor.DatabaseId, ct);
         if (existing is not null)
@@ -85,6 +88,22 @@ public class ActorResolver(
             m => string.Equals(m.GitHubLogin, sourceActor.Login, StringComparison.OrdinalIgnoreCase));
         if (configured is not null)
         {
+            // Catch configured-mapping typos at first sight of the affected actor rather than
+            // letting an unresolvable TargetUserId reach the exporter. Throwing here halts the
+            // sync run loudly so the operator fixes config before any data lands; falling
+            // through to least-loaded would silently rebind the actor and lock the mistake in
+            // (IdentityMapping is insert-once). When the sync orchestrator (#14/#15) exists,
+            // this check should move to start-of-run for earlier failure.
+            var exists = await db.TargetUsers.AnyAsync(
+                u => u.TargetSystem == TargetSystem.AzureDevOps && u.TargetUserId == configured.TargetUserId, ct);
+            if (!exists)
+            {
+                throw new InvalidOperationException(
+                    $"Configured IdentityMapping for GitHub login '{configured.GitHubLogin}' references " +
+                    $"TargetUserId '{configured.TargetUserId}', which is not present in the TargetUsers table. " +
+                    "Add the TargetUser row or correct the configuration.");
+            }
+
             AddMapping(canonicalActor.Id, configured.TargetUserId, configured.TargetUserDisplayName, MappingSource.Configured, now);
             return;
         }
@@ -93,8 +112,8 @@ public class ActorResolver(
         if (pick is null)
         {
             logger.LogWarning(
-                "No enabled TargetUser available for least-loaded fallback {Source} {ActorLogin}",
-                "github", sourceActor.Login);
+                "No enabled TargetUser for least-loaded fallback {Source} {ExternalId} {Reason}",
+                "github", sourceActor.DatabaseId, "empty or all-disabled TargetUser pool");
             return;
         }
 
