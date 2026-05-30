@@ -19,9 +19,10 @@ public class PostgresTestFixtureTests : IAsyncLifetime, IClassFixture<PostgresTe
     {
         await using var db = fixture.CreateContext();
 
-        // Migrations applied means the SyncConfigurations table exists and is empty.
-        var any = await db.SyncConfigurations.AnyAsync();
-        Assert.False(any);
+        // Migrations applied means the SyncConfigurations table exists and can be queried.
+        // We don't assert emptiness — the round-trip test in this class may have already inserted.
+        Assert.True(await db.Database.CanConnectAsync());
+        _ = await db.SyncConfigurations.CountAsync();
     }
 
     [SkippableFact]
