@@ -323,6 +323,32 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         Assert.Equal(1, await db.CanonicalEvents.CountAsync());
     }
 
+    [SkippableFact]
+    public async Task Test_10_concurrent_insert_of_same_event_absorbed_cleanly_on_loser_side()
+    {
+        var ts = At(2026, 5, 12);
+        var ev = GitHubIssueEventBuilder.Build(
+            sourceEntityId: "42", sourceEventId: "shared",
+            eventTime: ts, issueUpdatedAt: ts);
+
+        var p1 = BuildPersister();
+        var p2 = BuildPersister();
+
+        var task1 = p1.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(ev), CancellationToken.None);
+        var task2 = p2.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(ev), CancellationToken.None);
+
+        var results = await Task.WhenAll(task1, task2);
+
+        // Both calls complete without exceptions.
+        Assert.Equal(2, results.Length);
+        // Together they attempted 2 inserts; one was the winner, one was absorbed by ON CONFLICT.
+        Assert.Equal(2, results.Sum(r => r.EventsAttempted));
+        Assert.Equal(1, results.Sum(r => r.EventsInserted));
+
+        await using var db = fixture.CreateContext();
+        Assert.Equal(1, await db.CanonicalEvents.CountAsync());
+    }
+
     private IIssueEventPersister BuildPersister()
     {
         var services = new ServiceCollection();
