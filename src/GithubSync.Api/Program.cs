@@ -1,4 +1,5 @@
 using GithubSync.Api.Startup;
+using GithubSync.Api.Sync.Ingestion;
 using GithubSync.Data;
 using GithubSync.Sources.GitHub;
 using Microsoft.EntityFrameworkCore;
@@ -14,6 +15,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddAppHealthChecks();
 builder.Services.AddGitHubSource(builder.Configuration);
+builder.Services.AddIngestion(builder.Configuration);
 
 var app = builder.Build();
 
