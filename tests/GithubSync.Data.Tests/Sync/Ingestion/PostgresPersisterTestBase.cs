@@ -10,8 +10,9 @@ namespace GithubSync.Data.Tests.Sync.Ingestion;
 
 // Shared scaffolding for integration tests that exercise IssueEventPersister against real Postgres.
 // Per-test isolation: InitializeAsync truncates all app tables, then seeds a fresh SyncConfiguration.
-// DI lifecycle: BuildPersister tracks the created ServiceProvider so DisposeAsync can dispose every
-// scope/DbContext created during the test. Without that disposal the Npgsql pool would slowly leak.
+// DI lifecycle: BuildPersister tracks both the AsyncServiceScope (which owns the scoped DbContext +
+// Npgsql connection) and the ServiceProvider. DisposeAsync releases scopes first so DbContexts are
+// disposed cleanly, then the providers. Skipping either layer leaks Npgsql pool connections.
 public abstract class PostgresPersisterTestBase : IAsyncLifetime
 {
     private const string TruncateAllSql =
@@ -20,6 +21,7 @@ public abstract class PostgresPersisterTestBase : IAsyncLifetime
     protected PostgresTestFixture Fixture { get; }
     protected Guid ConfigId { get; private set; }
 
+    private readonly List<AsyncServiceScope> scopes = new();
     private readonly List<ServiceProvider> providers = new();
 
     protected PostgresPersisterTestBase(PostgresTestFixture fixture) => Fixture = fixture;
@@ -33,10 +35,15 @@ public abstract class PostgresPersisterTestBase : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        foreach (var scope in scopes)
+        {
+            await scope.DisposeAsync();
+        }
         foreach (var provider in providers)
         {
             await provider.DisposeAsync();
         }
+        scopes.Clear();
         providers.Clear();
     }
 
@@ -54,7 +61,8 @@ public abstract class PostgresPersisterTestBase : IAsyncLifetime
 
         var provider = services.BuildServiceProvider();
         providers.Add(provider);
-        var scope = provider.CreateScope();
+        var scope = provider.CreateAsyncScope();
+        scopes.Add(scope);
         return scope.ServiceProvider.GetRequiredService<IIssueEventPersister>();
     }
 

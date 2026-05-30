@@ -57,6 +57,9 @@ public class IssueEventPersister(
         RunStats stats,
         CancellationToken ct)
     {
+        // All events for one issue share the same IssueUpdatedAt — the fetcher stamps it from the
+        // GraphQL issue node before yielding its events. If that ever changes, the cursor would
+        // advance to the first event's stamp and silently miss later edits.
         var issueUpdatedAt = buffered[0].IssueUpdatedAt;
 
         await using var tx = await db.Database.BeginTransactionAsync(ct);
