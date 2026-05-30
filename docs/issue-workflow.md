@@ -11,9 +11,11 @@ This file defines how work must be created and moved through GitHub Issues in th
 
 ## Issue Types
 
-- `type:epic`: parent coordination issue that groups child issues.
+- `type:epic`: parent coordination issue that groups child issues toward a defined finish.
+- `type:rolling-epic`: open-ended coordination bucket for ongoing work (e.g. codebase quality, tech debt). Carries `type:epic` *and* `type:rolling-epic` so it appears in epic listings but can be filtered out where a finish line is assumed. Excluded from epic-level flow metrics, since by design it has no cycle time.
 - `type:feature`: implementation task.
 - `type:spike`: short research/de-risk task with explicit output.
+- `type:chore`: low-priority maintenance (cleanup, refactor, doc fix) that doesn't ship feature value. Typically lives under a `type:rolling-epic`.
 
 ## Required Labels
 
@@ -21,7 +23,7 @@ Each child issue must have:
 
 - one `area:*` label (for example `area:data-model`, `area:ingestion`, `area:egress`)
 - one `priority:*` label (`priority:p0` or `priority:p1`)
-- one `type:*` label (`type:feature` or `type:spike`)
+- one `type:*` label (`type:feature`, `type:spike`, or `type:chore`)
 
 ## Parent/Child Relationship Rules
 
