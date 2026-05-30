@@ -262,6 +262,40 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         }
     }
 
+    [SkippableFact]
+    public async Task Test_8_overlapping_window_tail_re_ingest_is_idempotent()
+    {
+        // First stream covers T1..T10 across 10 issues.
+        var first = Enumerable.Range(1, 10).Select(i =>
+            GitHubIssueEventBuilder.Build(
+                sourceEntityId: i.ToString(),
+                sourceEventId: $"e{i}",
+                eventTime: At(2026, 5, i),
+                issueUpdatedAt: At(2026, 5, i))).ToArray();
+
+        // Second stream covers T5..T15 — overlaps the tail of the first window.
+        var second = Enumerable.Range(5, 11).Select(i =>
+            GitHubIssueEventBuilder.Build(
+                sourceEntityId: i.ToString(),
+                sourceEventId: $"e{i}",
+                eventTime: At(2026, 5, i),
+                issueUpdatedAt: At(2026, 5, i))).ToArray();
+
+        var p1 = BuildPersister();
+        await p1.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(first), CancellationToken.None);
+
+        var p2 = BuildPersister();
+        var r2 = await p2.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(second), CancellationToken.None);
+
+        await using var db = fixture.CreateContext();
+        // 1..15 distinct issues, one event each.
+        Assert.Equal(15, await db.CanonicalEvents.CountAsync());
+        // T5..T10 were re-attempted but deduped.
+        Assert.Equal(11, r2.EventsAttempted);
+        Assert.Equal(5, r2.EventsInserted);
+        Assert.Equal(At(2026, 5, 15), (await db.SyncCursors.SingleAsync()).LastEventTime);
+    }
+
     private IIssueEventPersister BuildPersister()
     {
         var services = new ServiceCollection();
