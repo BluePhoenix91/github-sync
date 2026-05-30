@@ -134,6 +134,33 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         await AssertCursorAsync(issueUpdatedAt);
     }
 
+    [SkippableFact]
+    public async Task Test_6_unknown_kind_events_are_skipped_and_counted()
+    {
+        var ts = At(2026, 5, 10);
+        var unknown = GitHubIssueEventBuilder.Build(
+            sourceEntityId: "1", sourceEventId: "u1",
+            kind: (GitHubEventKind)999,
+            eventTime: ts, issueUpdatedAt: ts);
+        var normal = GitHubIssueEventBuilder.Build(
+            sourceEntityId: "1", sourceEventId: "n1",
+            kind: GitHubEventKind.IssueOpened,
+            eventTime: ts, issueUpdatedAt: ts);
+
+        var persister = BuildPersister();
+        var result = await persister.PersistAsync(
+            configId, GitHubIssueEventBuilder.AsStream(unknown, normal), CancellationToken.None);
+
+        Assert.Equal(1, result.EventsSkippedUnknownKind);
+        Assert.Equal(1, result.EventsAttempted);
+        Assert.Equal(1, result.EventsInserted);
+        Assert.Equal(1, result.IssuesCommitted);
+        Assert.Equal(ts, result.FinalCursor);
+
+        await using var db = fixture.CreateContext();
+        Assert.Equal(1, await db.CanonicalEvents.CountAsync());
+    }
+
     private IIssueEventPersister BuildPersister()
     {
         var services = new ServiceCollection();
