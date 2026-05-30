@@ -11,6 +11,7 @@ namespace GithubSync.Data.Tests.Sync.Ingestion;
 public class FirstRunCursorTests : IAsyncLifetime, IClassFixture<PostgresTestFixture>
 {
     private readonly PostgresTestFixture fixture;
+    private readonly List<ServiceProvider> providers = new();
     private Guid configId;
 
     public FirstRunCursorTests(PostgresTestFixture fixture) => this.fixture = fixture;
@@ -25,7 +26,14 @@ public class FirstRunCursorTests : IAsyncLifetime, IClassFixture<PostgresTestFix
         configId = await SeedSyncConfigurationAsync(db);
     }
 
-    public Task DisposeAsync() => Task.CompletedTask;
+    public async Task DisposeAsync()
+    {
+        foreach (var provider in providers)
+        {
+            await provider.DisposeAsync();
+        }
+        providers.Clear();
+    }
 
     [SkippableFact]
     public async Task First_call_creates_SyncCursor_row_with_IssueUpdatedAt()
@@ -66,6 +74,7 @@ public class FirstRunCursorTests : IAsyncLifetime, IClassFixture<PostgresTestFix
         services.Configure<IdentityMappingOptions>(_ => { });
 
         var provider = services.BuildServiceProvider();
+        providers.Add(provider);
         var scope = provider.CreateScope();
         return scope.ServiceProvider.GetRequiredService<IIssueEventPersister>();
     }
