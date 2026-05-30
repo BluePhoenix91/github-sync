@@ -296,6 +296,33 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         Assert.Equal(At(2026, 5, 15), (await db.SyncCursors.SingleAsync()).LastEventTime);
     }
 
+    [SkippableFact]
+    public async Task Test_9_null_SourceEventId_dedup_via_NULLS_NOT_DISTINCT()
+    {
+        var ts = At(2026, 5, 10);
+        var edit1 = GitHubIssueEventBuilder.Build(
+            sourceEntityId: "1", sourceEventId: null,
+            kind: GitHubEventKind.BodyEdited,
+            eventTime: ts, issueUpdatedAt: ts);
+
+        var edit2 = GitHubIssueEventBuilder.Build(
+            sourceEntityId: "1", sourceEventId: null,
+            kind: GitHubEventKind.BodyEdited,
+            eventTime: ts, issueUpdatedAt: ts);
+
+        var persister = BuildPersister();
+        var result = await persister.PersistAsync(
+            configId,
+            GitHubIssueEventBuilder.AsStream(edit1, edit2),
+            CancellationToken.None);
+
+        Assert.Equal(2, result.EventsAttempted);
+        Assert.Equal(1, result.EventsInserted);
+
+        await using var db = fixture.CreateContext();
+        Assert.Equal(1, await db.CanonicalEvents.CountAsync());
+    }
+
     private IIssueEventPersister BuildPersister()
     {
         var services = new ServiceCollection();
