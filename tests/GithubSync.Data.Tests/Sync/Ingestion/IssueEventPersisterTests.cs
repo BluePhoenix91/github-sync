@@ -195,6 +195,73 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         Assert.Equal(goodTs, cursor.LastEventTime);
     }
 
+    [SkippableFact]
+    public async Task Test_3_cancellation_mid_issue_2_then_resume_via_dedup_produces_clean_state()
+    {
+        var i1u = At(2026, 5, 1);
+        var i2u = At(2026, 5, 2);
+        var i3u = At(2026, 5, 3);
+
+        var i1e1 = GitHubIssueEventBuilder.Build(sourceEntityId: "1", sourceEventId: "i1e1", eventTime: i1u, issueUpdatedAt: i1u);
+        var i2e1 = GitHubIssueEventBuilder.Build(sourceEntityId: "2", sourceEventId: "i2e1", eventTime: i2u, issueUpdatedAt: i2u);
+        var i2e2 = GitHubIssueEventBuilder.Build(sourceEntityId: "2", sourceEventId: "i2e2", kind: GitHubEventKind.Commented, eventTime: i2u.AddSeconds(1), issueUpdatedAt: i2u);
+        var i3e1 = GitHubIssueEventBuilder.Build(sourceEntityId: "3", sourceEventId: "i3e1", eventTime: i3u, issueUpdatedAt: i3u);
+
+        var cts = new CancellationTokenSource();
+
+        // Wrapper stream that cancels the token after yielding the first event of issue 2.
+        static async IAsyncEnumerable<GitHubIssueEvent> CancellingStream(
+            CancellationTokenSource cts,
+            GitHubIssueEvent[] events,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            bool seenIssue2 = false;
+            foreach (var e in events)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return e;
+                await Task.Yield();
+                if (!seenIssue2 && e.SourceEntityId == "2")
+                {
+                    seenIssue2 = true;
+                    cts.Cancel();
+                }
+            }
+        }
+
+        var persister1 = BuildPersister();
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            persister1.PersistAsync(
+                configId,
+                CancellingStream(cts, new[] { i1e1, i2e1, i2e2, i3e1 }, cts.Token),
+                cts.Token));
+
+        // After cancellation: issue 1 committed, issue 2 rolled back, cursor at i1u.
+        await using (var db = fixture.CreateContext())
+        {
+            Assert.Equal(1, await db.CanonicalEvents.CountAsync());
+            Assert.Equal("1", (await db.CanonicalEvents.SingleAsync()).SourceEntityId);
+            Assert.Equal(i1u, (await db.SyncCursors.SingleAsync()).LastEventTime);
+        }
+
+        // Resume: feed the same full stream again (the persister does not read the cursor — see
+        // docs/superpowers/specs/2026-05-30-issue-event-persister-design.md, test 3 framing).
+        var persister2 = BuildPersister();
+        var result = await persister2.PersistAsync(
+            configId,
+            GitHubIssueEventBuilder.AsStream(i1e1, i2e1, i2e2, i3e1),
+            CancellationToken.None);
+
+        Assert.Equal(3, result.IssuesCommitted);
+        Assert.Equal(i3u, result.FinalCursor);
+
+        await using (var db = fixture.CreateContext())
+        {
+            Assert.Equal(4, await db.CanonicalEvents.CountAsync());
+            Assert.Equal(i3u, (await db.SyncCursors.SingleAsync()).LastEventTime);
+        }
+    }
+
     private IIssueEventPersister BuildPersister()
     {
         var services = new ServiceCollection();
