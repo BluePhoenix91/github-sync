@@ -66,6 +66,46 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         Assert.Equal(3, rowCount);
     }
 
+    [SkippableFact]
+    public async Task Test_2_cursor_advances_after_each_call_to_max_IssueUpdatedAt()
+    {
+        var i1u = At(2026, 5, 1);
+        var i2u = At(2026, 5, 2);
+        var i3u = At(2026, 5, 3);
+
+        var ev1 = GitHubIssueEventBuilder.Build(sourceEntityId: "1", sourceEventId: "e1", eventTime: i1u, issueUpdatedAt: i1u);
+        var ev2 = GitHubIssueEventBuilder.Build(sourceEntityId: "2", sourceEventId: "e2", eventTime: i2u, issueUpdatedAt: i2u);
+        var ev3 = GitHubIssueEventBuilder.Build(sourceEntityId: "3", sourceEventId: "e3", eventTime: i3u, issueUpdatedAt: i3u);
+
+        var p1 = BuildPersister();
+        var r1 = await p1.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(ev1), CancellationToken.None);
+        Assert.Equal(i1u, r1.FinalCursor);
+        await AssertCursorAsync(i1u);
+
+        var p2 = BuildPersister();
+        var r2 = await p2.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(ev1, ev2), CancellationToken.None);
+        Assert.Equal(i2u, r2.FinalCursor);
+        // Issue 1 was deduped, issue 2 inserted: 1 + 1 attempted, 0 + 1 inserted.
+        Assert.Equal(2, r2.EventsAttempted);
+        Assert.Equal(1, r2.EventsInserted);
+        await AssertCursorAsync(i2u);
+
+        var p3 = BuildPersister();
+        var r3 = await p3.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(ev1, ev2, ev3), CancellationToken.None);
+        Assert.Equal(i3u, r3.FinalCursor);
+        await AssertCursorAsync(i3u);
+
+        await using var db = fixture.CreateContext();
+        Assert.Equal(3, await db.CanonicalEvents.CountAsync());
+    }
+
+    private async Task AssertCursorAsync(DateTimeOffset expected)
+    {
+        await using var db = fixture.CreateContext();
+        var cursor = await db.SyncCursors.SingleAsync();
+        Assert.Equal(expected, cursor.LastEventTime);
+    }
+
     private IIssueEventPersister BuildPersister()
     {
         var services = new ServiceCollection();
