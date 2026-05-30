@@ -75,9 +75,10 @@ public class IssueEventPersister(
 
         await db.SaveChangesAsync(ct);
 
+        int inserted = 0;
         if (canonical.Count > 0)
         {
-            var inserted = await BulkInsertEventsAsync(canonical, ct);
+            inserted = await BulkInsertEventsAsync(canonical, ct);
             stats.EventsAttempted += canonical.Count;
             stats.EventsInserted += inserted;
         }
@@ -92,7 +93,7 @@ public class IssueEventPersister(
 
         logger.LogInformation(
             "Issue commit {ConfigId} {SourceEntityId} {EventsAttempted} {EventsInserted} {CursorAdvancedTo}",
-            syncConfigurationId, sourceEntityId, canonical.Count, stats.EventsInserted, issueUpdatedAt);
+            syncConfigurationId, sourceEntityId, canonical.Count, inserted, issueUpdatedAt);
     }
 
     private async Task<int> BulkInsertEventsAsync(
