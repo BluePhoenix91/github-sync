@@ -106,6 +106,34 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         Assert.Equal(expected, cursor.LastEventTime);
     }
 
+    [SkippableFact]
+    public async Task Test_7_pre_created_cursor_with_null_LastEventTime_is_advanced_on_first_commit()
+    {
+        // Orchestrator pre-created a cursor row before any sync ran.
+        await using (var seedDb = fixture.CreateContext())
+        {
+            seedDb.SyncCursors.Add(new SyncCursor
+            {
+                Id = Guid.NewGuid(),
+                SyncConfigurationId = configId,
+                LastEventTime = null,
+            });
+            await seedDb.SaveChangesAsync();
+        }
+
+        var issueUpdatedAt = At(2026, 5, 15);
+        var ev = GitHubIssueEventBuilder.Build(
+            sourceEntityId: "9", sourceEventId: "n9",
+            eventTime: issueUpdatedAt, issueUpdatedAt: issueUpdatedAt);
+
+        var persister = BuildPersister();
+        var result = await persister.PersistAsync(
+            configId, GitHubIssueEventBuilder.AsStream(ev), CancellationToken.None);
+
+        Assert.Equal(issueUpdatedAt, result.FinalCursor);
+        await AssertCursorAsync(issueUpdatedAt);
+    }
+
     private IIssueEventPersister BuildPersister()
     {
         var services = new ServiceCollection();
