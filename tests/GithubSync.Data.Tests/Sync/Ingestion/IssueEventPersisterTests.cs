@@ -161,6 +161,40 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         Assert.Equal(1, await db.CanonicalEvents.CountAsync());
     }
 
+    [SkippableFact]
+    public async Task Test_4_non_edit_with_null_SourceEventId_halts_the_run()
+    {
+        var goodTs = At(2026, 5, 1);
+        var badTs = At(2026, 5, 2);
+
+        var good = GitHubIssueEventBuilder.Build(
+            sourceEntityId: "1", sourceEventId: "g1",
+            kind: GitHubEventKind.IssueOpened,
+            eventTime: goodTs, issueUpdatedAt: goodTs);
+
+        // Closed is a mapped, non-edit kind. SourceEventId=null violates the invariant from
+        // docs/idempotency.md and the mapper throws InvalidOperationException.
+        var bad = GitHubIssueEventBuilder.Build(
+            sourceEntityId: "2", sourceEventId: null,
+            kind: GitHubEventKind.Closed,
+            eventTime: badTs, issueUpdatedAt: badTs);
+
+        var persister = BuildPersister();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            persister.PersistAsync(
+                configId,
+                GitHubIssueEventBuilder.AsStream(good, bad),
+                CancellationToken.None));
+
+        await using var db = fixture.CreateContext();
+        // Issue 1 (good) was committed before issue 2 (bad) failed. Issue 2 rolled back.
+        Assert.Equal(1, await db.CanonicalEvents.CountAsync());
+        Assert.Equal("1", (await db.CanonicalEvents.SingleAsync()).SourceEntityId);
+
+        var cursor = await db.SyncCursors.SingleAsync();
+        Assert.Equal(goodTs, cursor.LastEventTime);
+    }
+
     private IIssueEventPersister BuildPersister()
     {
         var services = new ServiceCollection();
