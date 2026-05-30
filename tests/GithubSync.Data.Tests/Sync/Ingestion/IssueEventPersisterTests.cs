@@ -1,40 +1,12 @@
 using System.Runtime.CompilerServices;
-using GithubSync.Api.Sync.Ingestion;
-using GithubSync.Data;
-using GithubSync.Data.Entities;
-using GithubSync.Data.Enums;
 using GithubSync.Sources.GitHub;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace GithubSync.Data.Tests.Sync.Ingestion;
 
-public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTestFixture>
+public class IssueEventPersisterTests : PostgresPersisterTestBase, IClassFixture<PostgresTestFixture>
 {
-    private readonly PostgresTestFixture fixture;
-    private readonly List<ServiceProvider> providers = new();
-    private Guid configId;
-
-    public IssueEventPersisterTests(PostgresTestFixture fixture) => this.fixture = fixture;
-
-    public async Task InitializeAsync()
-    {
-        await using var db = fixture.CreateContext();
-        await db.Database.ExecuteSqlRawAsync(
-            """TRUNCATE TABLE "CanonicalEvents", "SyncCursors", "IdentityMappings", "CanonicalActors", "SyncConfigurations", "TargetUsers", "DeadLetters", "WorkItemMappings" RESTART IDENTITY CASCADE""");
-
-        configId = await SeedSyncConfigurationAsync(db);
-    }
-
-    public async Task DisposeAsync()
-    {
-        foreach (var provider in providers)
-        {
-            await provider.DisposeAsync();
-        }
-        providers.Clear();
-    }
+    public IssueEventPersisterTests(PostgresTestFixture fixture) : base(fixture) { }
 
     [SkippableFact]
     public async Task Test_1_repeat_window_produces_zero_duplicates()
@@ -51,17 +23,17 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
 
         var persister1 = BuildPersister();
         await persister1.PersistAsync(
-            configId,
+            ConfigId,
             GitHubIssueEventBuilder.AsStream(ev1, ev2, ev3),
             CancellationToken.None);
 
         var persister2 = BuildPersister();
         await persister2.PersistAsync(
-            configId,
+            ConfigId,
             GitHubIssueEventBuilder.AsStream(ev1, ev2, ev3),
             CancellationToken.None);
 
-        await using var db = fixture.CreateContext();
+        await using var db = Fixture.CreateContext();
         var rowCount = await db.CanonicalEvents.CountAsync();
         Assert.Equal(3, rowCount);
     }
@@ -78,12 +50,12 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         var ev3 = GitHubIssueEventBuilder.Build(sourceEntityId: "3", sourceEventId: "e3", eventTime: i3u, issueUpdatedAt: i3u);
 
         var p1 = BuildPersister();
-        var r1 = await p1.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(ev1), CancellationToken.None);
+        var r1 = await p1.PersistAsync(ConfigId, GitHubIssueEventBuilder.AsStream(ev1), CancellationToken.None);
         Assert.Equal(i1u, r1.FinalCursor);
         await AssertCursorAsync(i1u);
 
         var p2 = BuildPersister();
-        var r2 = await p2.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(ev1, ev2), CancellationToken.None);
+        var r2 = await p2.PersistAsync(ConfigId, GitHubIssueEventBuilder.AsStream(ev1, ev2), CancellationToken.None);
         Assert.Equal(i2u, r2.FinalCursor);
         // Issue 1 was deduped, issue 2 inserted: 1 + 1 attempted, 0 + 1 inserted.
         Assert.Equal(2, r2.EventsAttempted);
@@ -91,31 +63,24 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         await AssertCursorAsync(i2u);
 
         var p3 = BuildPersister();
-        var r3 = await p3.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(ev1, ev2, ev3), CancellationToken.None);
+        var r3 = await p3.PersistAsync(ConfigId, GitHubIssueEventBuilder.AsStream(ev1, ev2, ev3), CancellationToken.None);
         Assert.Equal(i3u, r3.FinalCursor);
         await AssertCursorAsync(i3u);
 
-        await using var db = fixture.CreateContext();
+        await using var db = Fixture.CreateContext();
         Assert.Equal(3, await db.CanonicalEvents.CountAsync());
-    }
-
-    private async Task AssertCursorAsync(DateTimeOffset expected)
-    {
-        await using var db = fixture.CreateContext();
-        var cursor = await db.SyncCursors.SingleAsync();
-        Assert.Equal(expected, cursor.LastEventTime);
     }
 
     [SkippableFact]
     public async Task Test_7_pre_created_cursor_with_null_LastEventTime_is_advanced_on_first_commit()
     {
         // Orchestrator pre-created a cursor row before any sync ran.
-        await using (var seedDb = fixture.CreateContext())
+        await using (var seedDb = Fixture.CreateContext())
         {
-            seedDb.SyncCursors.Add(new SyncCursor
+            seedDb.SyncCursors.Add(new Data.Entities.SyncCursor
             {
                 Id = Guid.NewGuid(),
-                SyncConfigurationId = configId,
+                SyncConfigurationId = ConfigId,
                 LastEventTime = null,
             });
             await seedDb.SaveChangesAsync();
@@ -128,7 +93,7 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
 
         var persister = BuildPersister();
         var result = await persister.PersistAsync(
-            configId, GitHubIssueEventBuilder.AsStream(ev), CancellationToken.None);
+            ConfigId, GitHubIssueEventBuilder.AsStream(ev), CancellationToken.None);
 
         Assert.Equal(issueUpdatedAt, result.FinalCursor);
         await AssertCursorAsync(issueUpdatedAt);
@@ -149,7 +114,7 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
 
         var persister = BuildPersister();
         var result = await persister.PersistAsync(
-            configId, GitHubIssueEventBuilder.AsStream(unknown, normal), CancellationToken.None);
+            ConfigId, GitHubIssueEventBuilder.AsStream(unknown, normal), CancellationToken.None);
 
         Assert.Equal(1, result.EventsSkippedUnknownKind);
         Assert.Equal(1, result.EventsAttempted);
@@ -157,7 +122,7 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         Assert.Equal(1, result.IssuesCommitted);
         Assert.Equal(ts, result.FinalCursor);
 
-        await using var db = fixture.CreateContext();
+        await using var db = Fixture.CreateContext();
         Assert.Equal(1, await db.CanonicalEvents.CountAsync());
     }
 
@@ -182,11 +147,11 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         var persister = BuildPersister();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             persister.PersistAsync(
-                configId,
+                ConfigId,
                 GitHubIssueEventBuilder.AsStream(good, bad),
                 CancellationToken.None));
 
-        await using var db = fixture.CreateContext();
+        await using var db = Fixture.CreateContext();
         // Issue 1 (good) was committed before issue 2 (bad) failed. Issue 2 rolled back.
         Assert.Equal(1, await db.CanonicalEvents.CountAsync());
         Assert.Equal("1", (await db.CanonicalEvents.SingleAsync()).SourceEntityId);
@@ -232,12 +197,12 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         var persister1 = BuildPersister();
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
             persister1.PersistAsync(
-                configId,
+                ConfigId,
                 CancellingStream(cts, new[] { i1e1, i2e1, i2e2, i3e1 }, cts.Token),
                 cts.Token));
 
         // After cancellation: issue 1 committed, issue 2 rolled back, cursor at i1u.
-        await using (var db = fixture.CreateContext())
+        await using (var db = Fixture.CreateContext())
         {
             Assert.Equal(1, await db.CanonicalEvents.CountAsync());
             Assert.Equal("1", (await db.CanonicalEvents.SingleAsync()).SourceEntityId);
@@ -248,14 +213,14 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         // docs/superpowers/specs/2026-05-30-issue-event-persister-design.md, test 3 framing).
         var persister2 = BuildPersister();
         var result = await persister2.PersistAsync(
-            configId,
+            ConfigId,
             GitHubIssueEventBuilder.AsStream(i1e1, i2e1, i2e2, i3e1),
             CancellationToken.None);
 
         Assert.Equal(3, result.IssuesCommitted);
         Assert.Equal(i3u, result.FinalCursor);
 
-        await using (var db = fixture.CreateContext())
+        await using (var db = Fixture.CreateContext())
         {
             Assert.Equal(4, await db.CanonicalEvents.CountAsync());
             Assert.Equal(i3u, (await db.SyncCursors.SingleAsync()).LastEventTime);
@@ -282,12 +247,12 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
                 issueUpdatedAt: At(2026, 5, i))).ToArray();
 
         var p1 = BuildPersister();
-        await p1.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(first), CancellationToken.None);
+        await p1.PersistAsync(ConfigId, GitHubIssueEventBuilder.AsStream(first), CancellationToken.None);
 
         var p2 = BuildPersister();
-        var r2 = await p2.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(second), CancellationToken.None);
+        var r2 = await p2.PersistAsync(ConfigId, GitHubIssueEventBuilder.AsStream(second), CancellationToken.None);
 
-        await using var db = fixture.CreateContext();
+        await using var db = Fixture.CreateContext();
         // 1..15 distinct issues, one event each.
         Assert.Equal(15, await db.CanonicalEvents.CountAsync());
         // T5..T10 were re-attempted but deduped.
@@ -312,14 +277,14 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
 
         var persister = BuildPersister();
         var result = await persister.PersistAsync(
-            configId,
+            ConfigId,
             GitHubIssueEventBuilder.AsStream(edit1, edit2),
             CancellationToken.None);
 
         Assert.Equal(2, result.EventsAttempted);
         Assert.Equal(1, result.EventsInserted);
 
-        await using var db = fixture.CreateContext();
+        await using var db = Fixture.CreateContext();
         Assert.Equal(1, await db.CanonicalEvents.CountAsync());
     }
 
@@ -334,8 +299,8 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         var p1 = BuildPersister();
         var p2 = BuildPersister();
 
-        var task1 = p1.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(ev), CancellationToken.None);
-        var task2 = p2.PersistAsync(configId, GitHubIssueEventBuilder.AsStream(ev), CancellationToken.None);
+        var task1 = p1.PersistAsync(ConfigId, GitHubIssueEventBuilder.AsStream(ev), CancellationToken.None);
+        var task2 = p2.PersistAsync(ConfigId, GitHubIssueEventBuilder.AsStream(ev), CancellationToken.None);
 
         var results = await Task.WhenAll(task1, task2);
 
@@ -345,48 +310,7 @@ public class IssueEventPersisterTests : IAsyncLifetime, IClassFixture<PostgresTe
         Assert.Equal(2, results.Sum(r => r.EventsAttempted));
         Assert.Equal(1, results.Sum(r => r.EventsInserted));
 
-        await using var db = fixture.CreateContext();
+        await using var db = Fixture.CreateContext();
         Assert.Equal(1, await db.CanonicalEvents.CountAsync());
-    }
-
-    private IIssueEventPersister BuildPersister()
-    {
-        var services = new ServiceCollection();
-        services.AddSingleton(NullLoggerFactory.Instance);
-        services.AddLogging();
-        services.AddDbContext<AppDbContext>(o => o.UseNpgsql(fixture.TestConnectionString));
-        services.AddSingleton(TimeProvider.System);
-        services.AddScoped<IActorResolver, ActorResolver>();
-        services.AddScoped<ICanonicalEventMapper, CanonicalEventMapper>();
-        services.AddScoped<IIssueEventPersister, IssueEventPersister>();
-        services.Configure<IdentityMappingOptions>(_ => { });
-
-        var provider = services.BuildServiceProvider();
-        providers.Add(provider);
-        var scope = provider.CreateScope();
-        return scope.ServiceProvider.GetRequiredService<IIssueEventPersister>();
-    }
-
-    private static DateTimeOffset At(int year, int month, int day, int hour = 0) =>
-        new(year, month, day, hour, 0, 0, TimeSpan.Zero);
-
-    private static async Task<Guid> SeedSyncConfigurationAsync(AppDbContext db)
-    {
-        var id = Guid.NewGuid();
-        db.SyncConfigurations.Add(new SyncConfiguration
-        {
-            Id = id,
-            Name = "test-cfg",
-            Source = Source.GitHub,
-            SourceLocator = """{"owner":"o","repo":"r"}""",
-            TargetSystem = TargetSystem.AzureDevOps,
-            TargetLocator = """{"organization":"x","project":"y"}""",
-            TargetTypeMapping = "{}",
-            Enabled = true,
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow,
-        });
-        await db.SaveChangesAsync();
-        return id;
     }
 }
