@@ -45,8 +45,8 @@ At a high level:
 - source scope (v1): GitHub Issues only
 - primary target (v1): Azure DevOps
 - synchronization mode (v1): incremental sync of new events only
-- execution model: periodic scheduled worker
-- schedule (v1): every 5 minutes
+- execution model: two independent periodic scheduled workers — one per flow (import + export), each Hangfire recurring job with its own cron and per-config concurrency
+- schedule (v1, working defaults): import every 15 min, export every 5 min
 - persistence: PostgreSQL with EF Core
 - configuration model: per-sync configuration (source + target pairing)
 - orchestration/scheduler: Hangfire
