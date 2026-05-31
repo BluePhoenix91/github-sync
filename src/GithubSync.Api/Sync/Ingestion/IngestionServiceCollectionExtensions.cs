@@ -17,6 +17,7 @@ public static class IngestionServiceCollectionExtensions
         // holds a per-run cache. A new scope per sync run gives us a clean cache by construction.
         services.AddScoped<IActorResolver, ActorResolver>();
         services.AddScoped<ICanonicalEventMapper, CanonicalEventMapper>();
+        services.AddScoped<IIssueEventPersister, IssueEventPersister>();
 
         return services;
     }

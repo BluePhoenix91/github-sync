@@ -48,6 +48,28 @@ GitHub actors map to a fixed set of Azure DevOps users via configuration. Unknow
 - Run API locally: `dotnet run --project src/GithubSync.Api`
 - Hangfire dashboard (local): http://localhost:5000/hangfire
 
+### Tests against Postgres
+
+Integration tests in `tests/GithubSync.Data.Tests/` need a real PostgreSQL. The fixture resolves the connection string in this order:
+
+1. Env var `GITHUBSYNC_TEST_POSTGRES`
+2. User Secrets on the test project: `ConnectionStrings:TestPostgres`
+
+Set one of:
+
+- User Secrets (local dev, recommended):
+  ```
+  dotnet user-secrets set "ConnectionStrings:TestPostgres" "Host=localhost;Port=5432;Username=postgres;Password=<your-password>;Database=postgres" --project tests/GithubSync.Data.Tests
+  ```
+- Env var (CI / Lightsail runner):
+  ```
+  $env:GITHUBSYNC_TEST_POSTGRES = "Host=localhost;Port=5432;Username=postgres;Password=<your-password>;Database=postgres"
+  ```
+
+The `Database` segment must be present for Npgsql to parse the string; the fixture replaces it with a unique `githubsync_test_<guid>` database that it creates and drops per fixture lifecycle.
+
+If neither source is set, the integration tests skip — `dotnet test` still passes overall — and the skip message points back here.
+
 ## Repo etiquette
 
 - `main` is the only long-lived branch.

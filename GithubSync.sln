@@ -15,6 +15,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GithubSync.Tests", "tests\G
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GithubSync.Sources.GitHub", "src\GithubSync.Sources.GitHub\GithubSync.Sources.GitHub.csproj", "{CA73BF5B-D7AB-4615-BEB0-1F6B3C3DF032}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GithubSync.Data.Tests", "tests\GithubSync.Data.Tests\GithubSync.Data.Tests.csproj", "{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -73,6 +75,18 @@ Global
 		{CA73BF5B-D7AB-4615-BEB0-1F6B3C3DF032}.Release|x64.Build.0 = Release|Any CPU
 		{CA73BF5B-D7AB-4615-BEB0-1F6B3C3DF032}.Release|x86.ActiveCfg = Release|Any CPU
 		{CA73BF5B-D7AB-4615-BEB0-1F6B3C3DF032}.Release|x86.Build.0 = Release|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Debug|x64.Build.0 = Debug|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Debug|x86.Build.0 = Debug|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Release|x64.ActiveCfg = Release|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Release|x64.Build.0 = Release|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Release|x86.ActiveCfg = Release|Any CPU
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -82,5 +96,6 @@ Global
 		{137D7304-085A-4D12-AB6B-9C651E051B83} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{5BBDA7D1-B3A7-40B4-BF60-1FE298AA3AA9} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{CA73BF5B-D7AB-4615-BEB0-1F6B3C3DF032} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{CCB918BC-8DA8-4019-BF8C-FF20D36F75C1} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal
