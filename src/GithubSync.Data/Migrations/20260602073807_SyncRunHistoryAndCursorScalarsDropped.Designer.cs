@@ -3,6 +3,7 @@ using System;
 using GithubSync.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace GithubSync.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260602073807_SyncRunHistoryAndCursorScalarsDropped")]
+    partial class SyncRunHistoryAndCursorScalarsDropped
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -53,7 +56,7 @@ namespace GithubSync.Data.Migrations
                     b.HasIndex("Source", "SourceActorId")
                         .IsUnique();
 
-                    b.ToTable("CanonicalActors", (string)null);
+                    b.ToTable("CanonicalActors");
                 });
 
             modelBuilder.Entity("GithubSync.Data.Entities.CanonicalEvent", b =>
@@ -105,7 +108,7 @@ namespace GithubSync.Data.Migrations
 
                     NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("Source", "SourceEntityType", "SourceEntityId", "EventKind", "EventTime", "SourceEventId"), false);
 
-                    b.ToTable("CanonicalEvents", (string)null);
+                    b.ToTable("CanonicalEvents");
                 });
 
             modelBuilder.Entity("GithubSync.Data.Entities.DeadLetter", b =>
@@ -143,7 +146,7 @@ namespace GithubSync.Data.Migrations
 
                     b.HasIndex("CanonicalEventId", "Resolved");
 
-                    b.ToTable("DeadLetters", (string)null);
+                    b.ToTable("DeadLetters");
                 });
 
             modelBuilder.Entity("GithubSync.Data.Entities.IdentityMapping", b =>
@@ -177,7 +180,7 @@ namespace GithubSync.Data.Migrations
                     b.HasIndex("CanonicalActorId", "TargetSystem")
                         .IsUnique();
 
-                    b.ToTable("IdentityMappings", (string)null);
+                    b.ToTable("IdentityMappings");
                 });
 
             modelBuilder.Entity("GithubSync.Data.Entities.SyncConfiguration", b =>
@@ -222,7 +225,7 @@ namespace GithubSync.Data.Migrations
                     b.HasIndex("Source", "SourceLocator", "TargetSystem", "TargetLocator")
                         .IsUnique();
 
-                    b.ToTable("SyncConfigurations", (string)null);
+                    b.ToTable("SyncConfigurations");
                 });
 
             modelBuilder.Entity("GithubSync.Data.Entities.SyncCursor", b =>
@@ -245,7 +248,7 @@ namespace GithubSync.Data.Migrations
                     b.HasIndex("SyncConfigurationId")
                         .IsUnique();
 
-                    b.ToTable("SyncCursors", (string)null);
+                    b.ToTable("SyncCursors");
                 });
 
             modelBuilder.Entity("GithubSync.Data.Entities.SyncRun", b =>
@@ -292,7 +295,7 @@ namespace GithubSync.Data.Migrations
                     b.HasIndex("SyncConfigurationId", "StartedAt")
                         .IsDescending(false, true);
 
-                    b.ToTable("SyncRuns", (string)null);
+                    b.ToTable("SyncRuns");
                 });
 
             modelBuilder.Entity("GithubSync.Data.Entities.TargetUser", b =>
@@ -323,7 +326,7 @@ namespace GithubSync.Data.Migrations
                     b.HasIndex("TargetSystem", "TargetUserId")
                         .IsUnique();
 
-                    b.ToTable("TargetUsers", (string)null);
+                    b.ToTable("TargetUsers");
                 });
 
             modelBuilder.Entity("GithubSync.Data.Entities.WorkItemMapping", b =>
@@ -367,7 +370,7 @@ namespace GithubSync.Data.Migrations
                     b.HasIndex("SyncConfigurationId", "Source", "SourceEntityType", "SourceEntityId")
                         .IsUnique();
 
-                    b.ToTable("WorkItemMappings", (string)null);
+                    b.ToTable("WorkItemMappings");
                 });
 
             modelBuilder.Entity("GithubSync.Data.Entities.CanonicalEvent", b =>
