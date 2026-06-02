@@ -23,8 +23,13 @@ public class IssueIngestionJob(
     IBackgroundJobClient backgroundJobClient)
 {
     // Recurring scheduler: enumerate enabled GitHub configs and fan out one fire-and-forget
-    // job per config. Each per-config job carries [DisableConcurrentExecution] on its own
-    // method signature so two scheduler ticks colliding still cannot overlap a single config.
+    // job per config. Per-config concurrency is enforced by
+    // [DisableConcurrentExecutionByArgs] on RunForConfigurationAsync.
+    //
+    // Guard against overlapping ticks (next cron fires before the previous tick finished its
+    // DB read + enqueue loop). 60s timeout: the body is a single SELECT + N enqueues, well
+    // under that ceiling — anything slower is a misconfig worth surfacing.
+    [DisableConcurrentExecution(timeoutInSeconds: 60)]
     public async Task RunSchedulerAsync(CancellationToken ct)
     {
         var configIds = await db.SyncConfigurations
@@ -45,15 +50,16 @@ public class IssueIngestionJob(
         }
     }
 
-    // [DisableConcurrentExecution] is keyed on argument values when the job has at least one
-    // arg — Hangfire builds a per-argument lock so two scheduler ticks enqueuing the same
-    // configId cannot overlap. The timeout is how long the second worker waits for the lock
-    // before giving up and throwing. 900s (= one 15-minute cron interval) lets a single slow
-    // run queue the next tick rather than dropping it; a run that exceeds 30 minutes will
-    // surface as a TimeoutException on the next tick, which is the right "this repo is too
-    // big for the current cron" signal. If/when cron changes via Ingestion:CronExpression,
-    // revisit this number to stay at "≈ one interval".
-    [DisableConcurrentExecution(timeoutInSeconds: 900)]
+    // Custom filter keys the distributed lock by argument values (configId), so concurrency is
+    // per-config rather than global. The stock [DisableConcurrentExecution] locks on type+method
+    // alone, which would serialise all configs through one worker — see
+    // DisableConcurrentExecutionByArgsAttribute.
+    //
+    // 900s timeout (= one 15-minute cron interval) lets a single slow run queue the next tick
+    // rather than dropping it; a run exceeding ~30 minutes surfaces as a Hangfire timeout —
+    // the right "this repo is too big for the current cron" signal. If cron changes via
+    // Ingestion:CronExpression, revisit this number to stay at "≈ one interval".
+    [DisableConcurrentExecutionByArgs(timeoutSeconds: 900)]
     public async Task RunForConfigurationAsync(Guid syncConfigurationId, CancellationToken ct)
     {
         var config = await db.SyncConfigurations
@@ -65,6 +71,17 @@ public class IssueIngestionJob(
             logger.LogWarning(
                 "Ingestion job dispatched for missing SyncConfiguration {ConfigId} — skipping",
                 syncConfigurationId);
+            return;
+        }
+
+        // Re-check enrolment at execution time. The scheduler filters by Enabled + Source at
+        // enqueue, but a config can flip between enqueue and dequeue. Without this guard we'd
+        // still ingest once after disable/source-change.
+        if (!config.Enabled || config.Source != Source.GitHub)
+        {
+            logger.LogWarning(
+                "SyncConfiguration {ConfigId} no longer eligible (Enabled={Enabled}, Source={Source}) — skipping",
+                syncConfigurationId, config.Enabled, config.Source);
             return;
         }
 
@@ -89,14 +106,14 @@ public class IssueIngestionJob(
             // and mapper don't surface counts today — they're filled by future instrumentation work.
             metrics.RecordPersistResult(result);
         }
-        catch (OperationCanceledException ex)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Cancellation is expected on host shutdown; don't page the operator. Status stays
-            // Failed for v1 because the SyncRun row's job is "this run did not complete normally".
-            failure = ex;
-            metrics.IncrementFailed();
+            // Cooperative shutdown — bail out without further DB work. The persister advances
+            // the cursor per-issue, so progress is durable; skipping the SyncRun row is the
+            // correct response to "the host is going down".
             logger.LogInformation(
                 "Ingestion run cancelled for SyncConfiguration {ConfigId}", syncConfigurationId);
+            return;
         }
         catch (Exception ex)
         {
@@ -132,10 +149,7 @@ public class IssueIngestionJob(
             Message = message,
         });
 
-        // Deliberate CancellationToken.None: if the orchestrator was cancelled mid-run we still
-        // want the run-history row to land so the operator sees evidence of the cancellation rather
-        // than a silent gap.
-        await db.SaveChangesAsync(CancellationToken.None);
+        await db.SaveChangesAsync(ct);
 
         // Deliberately do NOT rethrow. Hangfire's default retry policy is fine for transient
         // infrastructure errors via the recurring tick — but a per-issue mapper exception is a

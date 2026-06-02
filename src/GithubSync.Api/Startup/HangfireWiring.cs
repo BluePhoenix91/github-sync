@@ -33,6 +33,14 @@ public static class HangfireWiring
         }
 
         var connectionString = configuration.GetConnectionString("AppDb");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            // Surface the misconfig at host-build time rather than as an opaque Npgsql error
+            // on the first Hangfire query. Lazy-failure mode swallows the proximate cause.
+            throw new InvalidOperationException(
+                "Hangfire is enabled but ConnectionStrings:AppDb is missing or blank. " +
+                "Set the connection string, or set Hangfire:Enabled=false to skip the scheduler.");
+        }
 
         services.AddHangfire(config => config
             .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
