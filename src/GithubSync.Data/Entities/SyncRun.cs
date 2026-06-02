@@ -8,6 +8,8 @@ public class SyncRun
 
     public Guid SyncConfigurationId { get; set; }
 
+    // Denormalised from SyncConfiguration.Source so cross-config queries can filter without a join.
+    // Writers are responsible for keeping it consistent with the parent's Source at insert time.
     public Source Source { get; set; }
 
     public DateTimeOffset StartedAt { get; set; }
