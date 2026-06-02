@@ -140,6 +140,6 @@ public class IssueIngestionJobPerConfigTests
         public string Create(Hangfire.Common.Job job, Hangfire.States.IState state)
             => Guid.NewGuid().ToString();
         public bool ChangeState(string jobId, Hangfire.States.IState state, string expectedState)
-            => true;
+            => throw new NotSupportedException();
     }
 }

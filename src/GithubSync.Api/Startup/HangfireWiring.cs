@@ -68,8 +68,6 @@ public static class HangfireWiring
 
     public static WebApplication MapHangfireDashboard(this WebApplication app)
     {
-        // Mirrors the EnabledConfigKey opt-out from AddHangfireScheduler — if the scheduler
-        // was skipped, the dashboard route would throw on missing Hangfire services.
         if (!app.Configuration.GetValue(EnabledConfigKey, defaultValue: true))
         {
             return app;
@@ -87,8 +85,6 @@ public static class HangfireWiring
 
     public static WebApplication RegisterRecurringIngestion(this WebApplication app)
     {
-        // Mirrors the EnabledConfigKey opt-out — RecurringJob.AddOrUpdate is static against
-        // JobStorage.Current, which is only set when AddHangfire ran.
         if (!app.Configuration.GetValue(EnabledConfigKey, defaultValue: true))
         {
             return app;

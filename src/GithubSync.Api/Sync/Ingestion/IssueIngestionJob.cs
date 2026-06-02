@@ -82,16 +82,21 @@ public class IssueIngestionJob(
                     $"SyncConfiguration {syncConfigurationId} has unparseable GitHub SourceLocator");
 
             // The persister upserts the cursor on first commit — see IssueEventPersister.UpsertCursorAsync.
-            // On a first-ever run, config.Cursor is null and we pass null as `since`.
             var stream = fetcher.FetchAsync(locator.Owner, locator.Repo, config.Cursor?.LastEventTime, ct);
             result = await persister.PersistAsync(syncConfigurationId, stream, ct);
 
-            // Map PersistResult into the existing in-memory metrics vocabulary (#38 emit surface).
-            // Expected v1 behaviour: emitter's "fetched=0 mapped=0" reflects that the fetcher and
-            // mapper don't surface counts today — they're filled by future instrumentation work.
-            metrics.IncrementPersisted(result.EventsInserted);
-            metrics.IncrementDeduped(result.EventsAttempted - result.EventsInserted);
-            metrics.IncrementSkipped(result.EventsSkippedUnknownKind);
+            // Expected v1 behaviour: the emitter's `fetched=0 mapped=0` reflects that the fetcher
+            // and mapper don't surface counts today — they're filled by future instrumentation work.
+            metrics.RecordPersistResult(result);
+        }
+        catch (OperationCanceledException ex)
+        {
+            // Cancellation is expected on host shutdown; don't page the operator. Status stays
+            // Failed for v1 because the SyncRun row's job is "this run did not complete normally".
+            failure = ex;
+            metrics.IncrementFailed();
+            logger.LogInformation(
+                "Ingestion run cancelled for SyncConfiguration {ConfigId}", syncConfigurationId);
         }
         catch (Exception ex)
         {

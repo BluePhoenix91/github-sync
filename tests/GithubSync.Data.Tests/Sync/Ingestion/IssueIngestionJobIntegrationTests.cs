@@ -122,7 +122,8 @@ public class IssueIngestionJobIntegrationTests : IClassFixture<PostgresTestFixtu
     private sealed class NullBackgroundJobClient : IBackgroundJobClient
     {
         public string Create(Job job, IState state) => Guid.NewGuid().ToString();
-        public bool ChangeState(string jobId, IState state, string expectedState) => true;
+        public bool ChangeState(string jobId, IState state, string expectedState) =>
+            throw new NotSupportedException();
     }
 
     // Skeleton lifted from tests/GithubSync.Tests/Sources/GitHub/IssuesPageResponseDeserializationTests.cs.
