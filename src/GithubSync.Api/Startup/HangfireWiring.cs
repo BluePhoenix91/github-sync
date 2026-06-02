@@ -16,9 +16,19 @@ public static class HangfireWiring
     // Hangfire creates the schema if missing on first call.
     private const string HangfireSchemaName = "hangfire";
 
+    // Opt-out flag for WebApplicationFactory<Program>-based tests where there is no real
+    // Postgres — the background server's connection attempt against the placeholder connection
+    // string otherwise hangs host startup until Npgsql gives up.
+    public const string EnabledConfigKey = "Hangfire:Enabled";
+
     public static IServiceCollection AddHangfireScheduler(
         this IServiceCollection services, IConfiguration configuration)
     {
+        if (!configuration.GetValue(EnabledConfigKey, defaultValue: true))
+        {
+            return services;
+        }
+
         var connectionString = configuration.GetConnectionString("AppDb");
 
         services.AddHangfire(config => config
@@ -50,6 +60,13 @@ public static class HangfireWiring
 
     public static WebApplication MapHangfireDashboard(this WebApplication app)
     {
+        // Mirrors the EnabledConfigKey opt-out from AddHangfireScheduler — if the scheduler
+        // was skipped, the dashboard route would throw on missing Hangfire services.
+        if (!app.Configuration.GetValue(EnabledConfigKey, defaultValue: true))
+        {
+            return app;
+        }
+
         app.MapHangfireDashboard("/hangfire", new DashboardOptions
         {
             Authorization = new[]
