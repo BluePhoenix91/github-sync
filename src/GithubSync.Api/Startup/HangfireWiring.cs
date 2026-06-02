@@ -1,3 +1,5 @@
+using GithubSync.Api.Sync;
+using GithubSync.Api.Sync.Ingestion;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Builder;
@@ -54,6 +56,11 @@ public static class HangfireWiring
             // Hangfire times are UTC per CLAUDE.md gotcha; server defaults to UTC for cron
             // when TimeZoneInfo is unspecified.
         });
+
+        // IBackgroundJobClient comes from AddHangfire above. Register job and emitter inside
+        // the enabled guard so the test host (Hangfire:Enabled=false) skips them cleanly.
+        services.AddScoped<IssueIngestionJob>();
+        services.AddScoped<SyncRunMetricsEmitter>();
 
         return services;
     }
