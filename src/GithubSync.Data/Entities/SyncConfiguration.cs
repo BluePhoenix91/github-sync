@@ -29,4 +29,5 @@ public class SyncConfiguration
     public SyncCursor? Cursor { get; set; }
     public ICollection<CanonicalEvent> Events { get; set; } = [];
     public ICollection<WorkItemMapping> WorkItemMappings { get; set; } = [];
+    public ICollection<SyncRun> Runs { get; set; } = [];
 }
