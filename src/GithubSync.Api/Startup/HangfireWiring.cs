@@ -96,8 +96,7 @@ public static class HangfireWiring
 
         // AddOrUpdate is idempotent on the job ID, so re-running it on every startup re-binds
         // the cron expression rather than duplicating the recurring entry.
-        using var scope = app.Services.CreateScope();
-        var options = scope.ServiceProvider
+        var options = app.Services
             .GetRequiredService<IOptions<IngestionOptions>>()
             .Value;
 
