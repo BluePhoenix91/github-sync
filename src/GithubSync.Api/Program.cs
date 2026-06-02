@@ -16,6 +16,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddAppHealthChecks();
 builder.Services.AddGitHubSource(builder.Configuration);
 builder.Services.AddIngestion(builder.Configuration);
+builder.Services.AddHangfireScheduler(builder.Configuration);
 
 var app = builder.Build();
 
@@ -25,6 +26,7 @@ RequiredSecrets.Validate(
     app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup.Secrets"));
 
 app.MapAppHealthEndpoints();
+app.MapHangfireDashboard();
 
 try
 {

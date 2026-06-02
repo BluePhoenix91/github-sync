@@ -1,0 +1,62 @@
+using Hangfire;
+using Hangfire.PostgreSql;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace GithubSync.Api.Startup;
+
+public static class HangfireWiring
+{
+    // Stable recurring-job ID — CLAUDE.md notes that updates to cron require re-registering
+    // with the same ID. Don't generate this name dynamically.
+    public const string SchedulerRecurringJobId = "ingest-github-scheduler";
+
+    // Separate schema for Hangfire storage so its tables don't mingle with app tables.
+    // Hangfire creates the schema if missing on first call.
+    private const string HangfireSchemaName = "hangfire";
+
+    public static IServiceCollection AddHangfireScheduler(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        var connectionString = configuration.GetConnectionString("AppDb");
+
+        services.AddHangfire(config => config
+            .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+            .UseSimpleAssemblyNameTypeSerializer()
+            .UseRecommendedSerializerSettings()
+            .UsePostgreSqlStorage(opt =>
+            {
+                opt.UseNpgsqlConnection(connectionString);
+            }, new PostgreSqlStorageOptions
+            {
+                SchemaName = HangfireSchemaName,
+                // PrepareSchemaIfNecessary defaults to true. Leave it: first run on a fresh DB
+                // creates the hangfire schema and its tables.
+            }));
+
+        // The background server processes jobs in-process. Keep the worker count low —
+        // v1 traffic is small (one tick per 15 min) and a high count costs nothing but
+        // makes hot-loop bugs noisier.
+        services.AddHangfireServer(opt =>
+        {
+            opt.WorkerCount = 2;
+            // Hangfire times are UTC per CLAUDE.md gotcha; server defaults to UTC for cron
+            // when TimeZoneInfo is unspecified.
+        });
+
+        return services;
+    }
+
+    public static WebApplication MapHangfireDashboard(this WebApplication app)
+    {
+        app.MapHangfireDashboard("/hangfire", new DashboardOptions
+        {
+            Authorization = new[]
+            {
+                new HangfireDashboardAuthorizationFilter(app.Environment),
+            },
+        });
+        return app;
+    }
+}
