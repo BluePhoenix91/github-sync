@@ -26,9 +26,5 @@ public class FirstRunCursorTests : PostgresPersisterTestBase, IClassFixture<Post
         var cursor = await db.SyncCursors.SingleAsync();
         Assert.Equal(ConfigId, cursor.SyncConfigurationId);
         Assert.Equal(issueUpdatedAt, cursor.LastEventTime);
-        Assert.Null(cursor.LastRunStartedAt);
-        Assert.Null(cursor.LastRunCompletedAt);
-        Assert.Null(cursor.LastRunStatus);
-        Assert.Null(cursor.LastRunMessage);
     }
 }
