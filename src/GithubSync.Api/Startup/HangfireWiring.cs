@@ -5,6 +5,7 @@ using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace GithubSync.Api.Startup;
 
@@ -81,6 +82,34 @@ public static class HangfireWiring
                 new HangfireDashboardAuthorizationFilter(app.Environment),
             },
         });
+        return app;
+    }
+
+    public static WebApplication RegisterRecurringIngestion(this WebApplication app)
+    {
+        // Mirrors the EnabledConfigKey opt-out — RecurringJob.AddOrUpdate is static against
+        // JobStorage.Current, which is only set when AddHangfire ran.
+        if (!app.Configuration.GetValue(EnabledConfigKey, defaultValue: true))
+        {
+            return app;
+        }
+
+        // AddOrUpdate is idempotent on the job ID, so re-running it on every startup re-binds
+        // the cron expression rather than duplicating the recurring entry.
+        using var scope = app.Services.CreateScope();
+        var options = scope.ServiceProvider
+            .GetRequiredService<IOptions<IngestionOptions>>()
+            .Value;
+
+        RecurringJob.AddOrUpdate<IssueIngestionJob>(
+            SchedulerRecurringJobId,
+            job => job.RunSchedulerAsync(CancellationToken.None),
+            options.CronExpression,
+            new RecurringJobOptions
+            {
+                TimeZone = TimeZoneInfo.Utc,
+            });
+
         return app;
     }
 }

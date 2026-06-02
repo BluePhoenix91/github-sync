@@ -27,6 +27,7 @@ RequiredSecrets.Validate(
 
 app.MapAppHealthEndpoints();
 app.MapHangfireDashboard();
+app.RegisterRecurringIngestion();
 
 try
 {
