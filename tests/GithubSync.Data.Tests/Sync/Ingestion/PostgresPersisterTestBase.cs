@@ -16,7 +16,7 @@ namespace GithubSync.Data.Tests.Sync.Ingestion;
 public abstract class PostgresPersisterTestBase : IAsyncLifetime
 {
     private const string TruncateAllSql =
-        """TRUNCATE TABLE "CanonicalEvents", "SyncCursors", "IdentityMappings", "CanonicalActors", "SyncConfigurations", "TargetUsers", "DeadLetters", "WorkItemMappings" RESTART IDENTITY CASCADE""";
+        """TRUNCATE TABLE "SyncRuns", "CanonicalEvents", "SyncCursors", "IdentityMappings", "CanonicalActors", "SyncConfigurations", "TargetUsers", "DeadLetters", "WorkItemMappings" RESTART IDENTITY CASCADE""";
 
     protected PostgresTestFixture Fixture { get; }
     protected Guid ConfigId { get; private set; }

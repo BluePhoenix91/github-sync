@@ -80,12 +80,31 @@ Per-configuration incremental sync state. One row per `SyncConfiguration`.
 | `SyncConfigurationId` | Guid | yes | FK, unique (1:1) |
 | `LastEventTime` | timestamp | no | Watermark — fetch events after this time |
 | `LastETag` | string | no | For conditional `If-None-Match` requests (#11) |
-| `LastRunStartedAt` | timestamp | no | |
-| `LastRunCompletedAt` | timestamp | no | Null while a run is in flight |
-| `LastRunStatus` | enum (`Success`, `Partial`, `Failed`) | no | |
-| `LastRunMessage` | string | no | Short human note for failed/partial runs |
 
-Cursor advances only after the events for the window are durably committed (#13).
+Cursor advances only after the events for the window are durably committed (#13). The previous `LastRun*` scalar fields were dropped in #70 — run-level state lives in `SyncRun` now.
+
+### `SyncRun`
+
+Per-run history. One row per orchestrator invocation per `SyncConfiguration`. Written by the import (#70) and export (#72) orchestrators after their per-issue/per-event work has committed.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `Id` | Guid | yes | PK — matches `SyncRunMetrics.RunId` so the log line and the row share the same identifier |
+| `SyncConfigurationId` | Guid | yes | FK |
+| `Source` | enum | yes | Denormalised from `SyncConfiguration` for cheap cross-config filtering |
+| `StartedAt` | timestamp | yes | UTC, stamped at the start of the run |
+| `CompletedAt` | timestamp | yes | UTC, stamped after the per-issue commits finish (or after the failure was caught) |
+| `Status` | enum (`Success`, `Partial`, `Failed`) | yes | Reuses the existing `SyncRunStatus` enum. v1 import orchestrator only writes `Success` or `Failed`; `Partial` is reserved for a future state where the persister surfaces "completed some issues then aborted" semantics. |
+| `IssuesCommitted` | int | yes | From `PersistResult` |
+| `EventsAttempted` | int | yes | From `PersistResult` |
+| `EventsInserted` | int | yes | From `PersistResult` |
+| `EventsSkippedUnknownKind` | int | yes | From `PersistResult` |
+| `DurationMs` | long | yes | From `SyncRunMetrics.DurationMs` (stopwatch around the per-config method) |
+| `Message` | string | no | Human note for failed/partial runs (the caught exception's `Message`) |
+
+Index: `(SyncConfigurationId, StartedAt DESC)` — supports "last N runs for config X, newest first".
+
+Lifecycle: append-only. The cursor advance and the `SyncRun` write are *not* in the same transaction — the cursor is advanced per issue inside the persister, while the `SyncRun` row is written once per run after all per-issue commits have already landed. A crash between the last per-issue commit and the `SyncRun` write is a known edge: the cursor is durable, but the run's metrics are lost.
 
 ### `CanonicalEvent`
 
@@ -226,6 +245,7 @@ Failed exports that exhausted retries. Queryable for inspection and manual repla
 
 ```
 SyncConfiguration 1 ──── 1 SyncCursor
+SyncConfiguration 1 ──── N SyncRun
 SyncConfiguration 1 ──── N CanonicalEvent
 SyncConfiguration 1 ──── N WorkItemMapping
 
