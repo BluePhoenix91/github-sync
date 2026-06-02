@@ -10,6 +10,14 @@
 
 ---
 
+## Workflow precondition (read first)
+
+**All commits in this plan land on a feature branch, not on `main`.** Before Task 1 begins, a worktree must exist on a `feat/...` branch (the `superpowers:using-git-worktrees` skill creates one). Every `git` invocation in every task below assumes the working directory is that worktree's checkout — not the original repo root.
+
+**Subagent guard:** every implementer subagent dispatched to execute these tasks must, as Step 0, run `git rev-parse --show-toplevel` and verify the result equals the worktree's absolute path before touching any file. If it doesn't, the subagent must abort with status `BLOCKED` and report the actual `--show-toplevel` value. Bash invocations should pass `-C <worktree-absolute-path>` to `git` so cwd drift can't land a commit on the wrong branch. This guard exists because cwd inheritance across subagent dispatches is unreliable; without an explicit check, a Task can silently commit to `main`.
+
+---
+
 ## File structure
 
 **New files**
