@@ -78,6 +78,7 @@ If neither source is set, the integration tests skip — `dotnet test` still pas
 - Squash-merge title follows Conventional Commits: `feat: add Azure DevOps work-item adapter`, `fix: handle GitHub secondary rate-limit response`, `chore: bump EF Core to 9.0.2`.
 - One PR = one logical change. If the description contains "and also", split it.
 - Run `/simplify` against the branch diff before pushing any PR that touches `.cs` files. Address actionable findings; surface any skipped findings in the PR description with a one-line reason each. Doc/config-only PRs skip this step. EF-generated migration files (`src/GithubSync.Data/Migrations/*.cs`) are reviewed at the source level (entity configurations + `AppDbContext`); never hand-edit them — they regenerate deterministically.
+- Implementation plans intended for subagent-driven execution must include a "Workflow precondition" block at the top that instructs every implementer subagent to verify `git rev-parse --show-toplevel` matches the worktree path at Step 0 and to pass `-C <absolute-worktree-path>` on every git invocation. Without this guard, subagents can silently commit to `main` instead of the feature branch.
 
 ## Issue workflow
 
@@ -103,3 +104,4 @@ GitHub Actions. Repo is public since the project only handles public GitHub data
 - Hangfire dashboard is unauthenticated by default. Always configure an authorization filter before deploying anywhere reachable.
 - Hangfire.PostgreSql package: pin a version explicitly. Two community forks with similar names and incompatible APIs exist. The maintained one is `Hangfire.PostgreSql` by frankhommers.
 - Hangfire requires UTC for scheduled times. Mixing local and UTC produces silent drift in recurring triggers.
+- Hangfire's stock `[DisableConcurrentExecution(timeoutInSeconds)]` keys its distributed lock on `methodInfo.FullName` only — every invocation of that method serialises globally regardless of arguments. For per-argument concurrency (e.g. one lock per `syncConfigurationId`), use the project-local `DisableConcurrentExecutionByArgsAttribute` in `src/GithubSync.Api/Sync/Ingestion/`, which folds `Job.Args` into the lock resource.
