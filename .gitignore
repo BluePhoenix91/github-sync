@@ -7,3 +7,7 @@ TestResults/
 *.suo
 *.cache
 *.pdb
+
+# EF Core migration bundle — generated on every deploy by .github/workflows/cd.yml.
+# Local builds via `dotnet ef migrations bundle` also drop it here.
+efbundle.exe
