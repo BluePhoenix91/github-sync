@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Hosting;
 using Sentry;
 using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 using Serilog.Formatting.Compact;
 
 namespace GithubSync.Api.Startup;
@@ -19,6 +21,14 @@ public static class LoggingWiring
     // With blockWhenFull: false, drops on overflow surface via Serilog SelfLog
     // (configure SelfLog.Enable to capture overruns when diagnosing slow disks).
     internal const int FileSinkAsyncBufferSize = 10_000;
+
+    // EF Core emits this source context for every SQL command, including
+    // CommandError (EventId 20102) which fires alongside the actual exception
+    // from Microsoft.EntityFrameworkCore.Query. The Command record carries no
+    // exception, just the SQL text — Sentry groups it as a separate issue
+    // (and re-groups again on elapsed-ms variance), so one failure produces
+    // multiple Sentry events. The Query event keeps the real exception alert.
+    internal const string EfCommandSourceContext = "Microsoft.EntityFrameworkCore.Database.Command";
 
     public static void Configure(WebApplicationBuilder builder)
     {
@@ -64,8 +74,24 @@ public static class LoggingWiring
             }
         }
 
-        configuration.WriteTo.Sentry(o => o.InitializeSdk = false);
+        // Sub-logger so the filter only narrows what Sentry sees. The file sink
+        // and Seq sink at the outer scope still receive every event — they're
+        // the authoritative SQL history.
+        configuration.WriteTo.Logger(sentryOnly => sentryOnly
+            .Filter.ByExcluding(IsEfCommandLogEvent)
+            .WriteTo.Sentry(o => o.InitializeSdk = false));
     }
 
     internal static bool ShouldEnableSeq(string? seqServerUrl) => !string.IsNullOrWhiteSpace(seqServerUrl);
+
+    internal static bool IsEfCommandLogEvent(LogEvent logEvent)
+    {
+        if (!logEvent.Properties.TryGetValue(Constants.SourceContextPropertyName, out var value))
+        {
+            return false;
+        }
+
+        return value is ScalarValue { Value: string sourceContext }
+            && sourceContext == EfCommandSourceContext;
+    }
 }
