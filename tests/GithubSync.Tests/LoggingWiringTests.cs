@@ -92,6 +92,60 @@ public class LoggingWiringTests
         Assert.Equal(expected, LoggingWiring.ShouldEnableSeq(url));
     }
 
+    [Theory]
+    [InlineData(LoggingWiring.EfCommandSourceContext, true)]
+    [InlineData("Microsoft.EntityFrameworkCore.Query", false)]
+    [InlineData("GithubSync.Api.Sync.Ingestion.IssueIngestionJob", false)]
+    public void IsEfCommandLogEvent_matches_only_EF_command_source_context(string sourceContext, bool expected)
+    {
+        var captured = CaptureLogEvent(logger =>
+            logger.ForContext(Constants.SourceContextPropertyName, sourceContext).Error("any"));
+
+        Assert.Equal(expected, LoggingWiring.IsEfCommandLogEvent(captured));
+    }
+
+    [Fact]
+    public void IsEfCommandLogEvent_returns_false_when_SourceContext_absent()
+    {
+        var captured = CaptureLogEvent(logger => logger.Error("no source context here"));
+
+        Assert.False(LoggingWiring.IsEfCommandLogEvent(captured));
+    }
+
+    [Fact]
+    public void Sub_logger_excluding_IsEfCommandLogEvent_drops_only_EF_command_events()
+    {
+        var sink = new CapturingSink();
+        using (var logger = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .WriteTo.Logger(sub => sub
+                .Filter.ByExcluding(LoggingWiring.IsEfCommandLogEvent)
+                .WriteTo.Sink(sink))
+            .CreateLogger())
+        {
+            logger.ForContext(Constants.SourceContextPropertyName, LoggingWiring.EfCommandSourceContext)
+                .Error("dropped CommandError noise");
+            logger.ForContext(Constants.SourceContextPropertyName, "Microsoft.EntityFrameworkCore.Query")
+                .Error("kept QueryIterationFailed alert");
+            logger.ForContext(Constants.SourceContextPropertyName, "GithubSync.Api")
+                .Information("kept app log");
+        }
+
+        Assert.All(sink.Events, e =>
+            Assert.NotEqual(LoggingWiring.EfCommandSourceContext, ((ScalarValue)e.Properties[Constants.SourceContextPropertyName]).Value));
+        Assert.Equal(2, sink.Events.Count);
+    }
+
+    private static LogEvent CaptureLogEvent(Action<Serilog.ILogger> emit)
+    {
+        var sink = new CapturingSink();
+        using (var logger = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(sink).CreateLogger())
+        {
+            emit(logger);
+        }
+        return Assert.Single(sink.Events);
+    }
+
     [Fact]
     public void Async_wrapper_flushes_buffered_events_when_logger_is_disposed()
     {
