@@ -44,6 +44,27 @@ jobs:
       - name: Publish
         run: dotnet publish src/GithubSync.Api/GithubSync.Api.csproj -c Release -r win-x64 --self-contained false -p:SourceRevisionId=${{ github.sha }} -o publish
 
+      # Generate a self-contained EF Core migration bundle from the same source the publish
+      # used. The bundle embeds the migration history as compiled SQL plus a thin runner;
+      # at apply time it needs only a connection string, no .NET runtime, no dotnet-ef tool.
+      # Hangfire__Enabled=false: HangfireWiring.AddHangfireScheduler throws when the AppDb
+      # connection string is blank (which it is in CI), and the bundle build only needs the
+      # EF model — Hangfire wiring isn't relevant here.
+      - name: Generate EF Core migration bundle
+        shell: powershell
+        env:
+          Hangfire__Enabled: 'false'
+        run: |
+          dotnet tool restore
+          dotnet ef migrations bundle `
+            --project src/GithubSync.Data `
+            --startup-project src/GithubSync.Api `
+            --configuration Release `
+            --target-runtime win-x64 `
+            --self-contained `
+            --output efbundle.exe `
+            --force
+
       - name: Stop app pool
         shell: powershell
         run: |
@@ -57,6 +78,25 @@ jobs:
           }
           if ((Get-WebAppPoolState -Name $env:APP_POOL).Value -ne 'Stopped') {
             throw "App pool '$env:APP_POOL' did not stop within 30s."
+          }
+
+      # Apply pending migrations after the pool is stopped (no in-flight queries against an
+      # about-to-change schema) and BEFORE rotating the backup folder. If the bundle fails,
+      # the previous publish directory is still in place and the `if: always()` Start app pool
+      # at the end can bring the old code back up. EF Core wraps each migration in a
+      # transaction, so a partial failure leaves the failing migration rolled back and the
+      # next deploy resumes from there.
+      - name: Apply EF Core migrations
+        shell: powershell
+        env:
+          APP_DB_CONNECTION_STRING: ${{ secrets.APP_DB_CONNECTION_STRING }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:APP_DB_CONNECTION_STRING)) {
+            throw "APP_DB_CONNECTION_STRING secret is empty — cannot apply migrations."
+          }
+          .\efbundle.exe --connection $env:APP_DB_CONNECTION_STRING
+          if ($LASTEXITCODE -ne 0) {
+            throw "EF Core migration bundle exited with code $LASTEXITCODE."
           }
 
       - name: Rotate backup

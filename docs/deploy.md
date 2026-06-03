@@ -229,11 +229,13 @@ A fresh remove-token is generated from the same Settings → Runners page.
 
 1. `actions/checkout@v4` + `actions/setup-dotnet@v4` pinned to `10.0.x`.
 2. `dotnet publish src/GithubSync.Api/GithubSync.Api.csproj -c Release -r win-x64 --self-contained false -o publish`. Framework-dependent because the host's Hosting Bundle provides the runtime.
-3. Stop the `github-sync-api` app pool and wait up to 30 seconds for the worker to exit. The stop is what releases file locks on the running binaries; a recycle alone would not.
-4. Rotate the previous publish folder to a timestamped sibling backup: `C:\Azureflow-QA\GithubSync.API` → `C:\Azureflow-QA\GithubSync.API.backup-<yyyyMMdd-HHmmss>`. Any older `GithubSync.API.backup-*` is removed first, so exactly **one** backup is kept on disk at a time.
-5. Copy the publish output into `C:\Azureflow-QA\GithubSync.API`.
-6. Re-apply the app pool's environment variables from the four GitHub Actions secrets (see [Secrets](#secrets) below). The step fails the deploy if any secret is empty, before the worker would otherwise start with a blank value.
-7. Start the app pool. This step runs even if an earlier step failed (`if: always()`) — leaving the pool stopped on a failed deploy would dark the site for as long as it takes someone to notice.
+3. `dotnet tool restore` (reads [`.config/dotnet-tools.json`](../.config/dotnet-tools.json), which pins `dotnet-ef`) and then `dotnet ef migrations bundle ... --self-contained --output efbundle.exe`. Produces a single self-contained Windows executable holding the migration history. `Hangfire__Enabled=false` is set on this step only — `HangfireWiring.AddHangfireScheduler` would throw against the blank CI connection string, and the bundle build only needs the EF model.
+4. Stop the `github-sync-api` app pool and wait up to 30 seconds for the worker to exit. The stop is what releases file locks on the running binaries; a recycle alone would not.
+5. Apply EF Core migrations: `.\efbundle.exe --connection $env:APP_DB_CONNECTION_STRING`. See [Database migrations](#database-migrations) below.
+6. Rotate the previous publish folder to a timestamped sibling backup: `C:\Azureflow-QA\GithubSync.API` → `C:\Azureflow-QA\GithubSync.API.backup-<yyyyMMdd-HHmmss>`. Any older `GithubSync.API.backup-*` is removed first, so exactly **one** backup is kept on disk at a time.
+7. Copy the publish output into `C:\Azureflow-QA\GithubSync.API`.
+8. Re-apply the app pool's environment variables from the four GitHub Actions secrets (see [Secrets](#secrets) below). The step fails the deploy if any secret is empty, before the worker would otherwise start with a blank value.
+9. Start the app pool. This step runs even if an earlier step failed (`if: always()`) — leaving the pool stopped on a failed deploy would dark the site for as long as it takes someone to notice.
 
 `concurrency: { group: cd, cancel-in-progress: false }` so a second merge that lands mid-deploy queues behind the first rather than cancelling it half-way through a stop/copy/start.
 
@@ -253,14 +255,28 @@ Only the most recent backup is preserved, so the rollback window covers the **im
 
 ### Database migrations
 
-`dotnet ef database update` is **not** run from CD. Migrations stay a manual, gated step — applied after explicit review against the target environment.
+Applied by CD via an **EF Core migration bundle** — a self-contained Windows executable produced during `dotnet publish` from the same commit. Apply runs between "Stop app pool" and "Rotate backup", invoked as `.\efbundle.exe --connection $env:APP_DB_CONNECTION_STRING`.
+
+Why a bundle rather than `dotnet ef database update` from the runner: the bundle embeds the migration history at build time, runs without `dotnet-ef` installed on the host, and is version-pinned to the same SHA as the binaries it ships alongside. `dotnet-ef` itself is pinned via the local tool manifest at [`.config/dotnet-tools.json`](../.config/dotnet-tools.json) so CI and a developer running `dotnet tool restore` build the same bundle bits.
+
+Why **not** programmatic startup `MigrateAsync`: deliberately kept out of the app. Migrations are a reviewable deploy-pipeline step, not silent app-startup behaviour.
+
+Apply ordering inside the workflow:
+
+- Run after the pool is stopped (no in-flight queries against a schema mid-change).
+- Run before rotating the backup folder, so a bundle failure leaves the previous publish on disk and `Start app pool` (which has `if: always()`) brings the old code back up rather than darkening the site.
+- EF Core wraps each migration in a transaction; a partial failure leaves the failing migration rolled back and earlier ones committed. The next deploy attempt resumes from the failing migration.
+
+Idempotency is intrinsic: if no migrations are pending, the bundle exits 0 with no schema change.
 
 ### Failure modes
 
 - **Build or publish fails**: workflow stops before touching the host. No state change.
+- **Migration bundle build fails** (the `Generate EF Core migration bundle` step): workflow stops before the pool is touched. No host or DB state change. Most likely cause is a build error already surfaced by the prior publish step or a missing `.config/dotnet-tools.json` pin.
 - **Stop-pool timeout** (worker process won't exit within 30s): workflow fails red and stops. The site keeps serving the previous version. Investigate the worker on the host (`Get-Process w3wp`).
+- **Migration apply fails** (the `Apply EF Core migrations` step): workflow fails red. Backup hasn't been rotated yet, so `C:\Azureflow-QA\GithubSync.API` still holds the previously-deployed binaries; `Start app pool` (`if: always()`) brings them back up against whichever migrations did commit before the failing one. Inspect the bundle output in the Actions log to identify the failing migration, fix it, and re-run. The bundle is safe to re-run — already-applied migrations are skipped.
 - **Copy fails mid-way**: the workflow still starts the pool, so the site comes up against partial files and will likely return errors. Use the manual rollback above.
-- **Missing GitHub Actions secret**: the "Configure app pool environment variables" step throws before any IIS config changes, naming each missing secret. Configure the secret in **Settings → Secrets and variables → Actions** and re-run.
+- **Missing GitHub Actions secret**: the "Configure app pool environment variables" step throws before any IIS config changes, naming each missing secret. Configure the secret in **Settings → Secrets and variables → Actions** and re-run. The "Apply EF Core migrations" step has its own explicit check that throws with a clear message if `APP_DB_CONNECTION_STRING` is empty, before invoking the bundle.
 - **App fails to start with "Missing required secrets"**: the runtime validator (`RequiredSecrets.Validate`) ran and found one or more secrets unset on the app pool. The worker logs the missing list before exiting. Confirm the GitHub Actions secrets exist and re-run CD; the deploy step writes them onto the pool fresh on every run.
 - **Start-pool fails**: requires manual intervention via IIS Manager. Site is down until resolved.
 
