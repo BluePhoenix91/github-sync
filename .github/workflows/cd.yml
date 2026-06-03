@@ -92,7 +92,7 @@ jobs:
           APP_DB_CONNECTION_STRING: ${{ secrets.APP_DB_CONNECTION_STRING }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:APP_DB_CONNECTION_STRING)) {
-            throw "APP_DB_CONNECTION_STRING secret is empty — cannot apply migrations."
+            throw "APP_DB_CONNECTION_STRING secret is empty; cannot apply migrations."
           }
           .\efbundle.exe --connection $env:APP_DB_CONNECTION_STRING
           if ($LASTEXITCODE -ne 0) {
