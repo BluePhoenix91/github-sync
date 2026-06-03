@@ -40,5 +40,10 @@ public class SyncConfigurationConfiguration : IEntityTypeConfiguration<SyncConfi
             .WithOne(x => x.SyncConfiguration)
             .HasForeignKey(x => x.SyncConfigurationId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasMany(x => x.Runs)
+            .WithOne(x => x.SyncConfiguration)
+            .HasForeignKey(x => x.SyncConfigurationId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }

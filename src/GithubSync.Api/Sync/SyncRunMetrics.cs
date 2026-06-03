@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using GithubSync.Api.Sync.Ingestion;
 using GithubSync.Data.Enums;
 
 namespace GithubSync.Api.Sync;
@@ -28,6 +29,15 @@ public sealed class SyncRunMetrics(Source source)
     public void IncrementDeduped(int n = 1) => Deduped += n;
     public void IncrementSkipped(int n = 1) => Skipped += n;
     public void IncrementFailed(int n = 1) => Failed += n;
+
+    // Pins the PersistResult → metrics mapping in one place so the export orchestrator (#72)
+    // doesn't re-derive `Deduped = Attempted - Inserted` from scratch and risk drift.
+    public void RecordPersistResult(PersistResult result)
+    {
+        IncrementPersisted(result.EventsInserted);
+        IncrementDeduped(result.EventsAttempted - result.EventsInserted);
+        IncrementSkipped(result.EventsSkippedUnknownKind);
+    }
 
     public void Complete()
     {

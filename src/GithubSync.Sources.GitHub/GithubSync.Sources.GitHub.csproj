@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="GithubSync.Tests" />
+    <InternalsVisibleTo Include="GithubSync.Data.Tests" />
   </ItemGroup>
 
 </Project>

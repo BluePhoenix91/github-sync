@@ -13,7 +13,7 @@ What's covered:
 
 What is **not** covered yet — separate child issues under [#29](https://github.com/BluePhoenix91/github-sync/issues/29) will fill these in:
 
-- Hangfire dashboard auth filter, recurring job registration, keep-alive strategy.
+- Hangfire keep-alive strategy. The dashboard authorization filter and recurring job registration both landed in #70 — see [Ingestion](#ingestion) below.
 
 CI lives in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (build + test on PR and on push to `main`). CD is described below.
 
@@ -318,6 +318,22 @@ If `SENTRY_DSN` is unset, `SentryWiring.Configure` skips initialization entirely
 ### Verifying events land
 
 The repo does not ship a debug-throw route. Live verification happens against the first real exception after deploy: trigger one (or wait for one), then in Sentry confirm the event carries `environment=Production` and a `release` tag of the form `<version>+<sha>` matching the deployed commit.
+
+## Ingestion
+
+The GitHub ingestion runs on a Hangfire recurring schedule. The cron expression is read from `Ingestion:CronExpression` in `appsettings.json` (or any overlaid environment / user-secrets source).
+
+Default: `"*/15 * * * *"` (every 15 minutes).
+
+Setting a different value:
+
+- Per-environment override via `appsettings.Production.json` (committed) or `Ingestion__CronExpression` env var on the IIS app pool (uncommitted).
+- Updates take effect on the next app-pool restart. The recurring job uses a stable ID (`ingest-github-scheduler`) so changing the cron re-registers the existing job rather than duplicating.
+- The per-config concurrency lock has a 900-second timeout (one default cron interval). If a single run exceeds that, the next tick will surface a `TimeoutException` on the Hangfire dashboard — the right "this repo is too big for the current cron" signal. If you raise the cron interval, raise the timeout in `IssueIngestionJob.RunForConfigurationAsync` to match.
+
+The Hangfire dashboard at `/hangfire` is allowed only in `Development`. In `Production` the authorization filter returns `403`. A production-grade auth surface is tracked as a separate concern under epic [#29](https://github.com/BluePhoenix91/github-sync/issues/29).
+
+Hangfire wiring is gated by `Hangfire:Enabled` (defaults `true`). The flag exists for `WebApplicationFactory<Program>`-based tests that can't reach a real Postgres; leave it unset in production.
 
 ## Logging
 

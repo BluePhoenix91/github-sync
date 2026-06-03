@@ -11,6 +11,9 @@ public static class IngestionServiceCollectionExtensions
         services.Configure<IdentityMappingOptions>(
             configuration.GetSection(IdentityMappingOptions.SectionName));
 
+        services.Configure<IngestionOptions>(
+            configuration.GetSection(IngestionOptions.SectionName));
+
         services.AddSingleton(TimeProvider.System);
 
         // Scoped: both services capture the request/job-scoped AppDbContext and the resolver

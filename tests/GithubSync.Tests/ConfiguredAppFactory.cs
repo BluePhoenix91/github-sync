@@ -20,6 +20,7 @@ internal class ConfiguredAppFactory : WebApplicationFactory<Program>
             {
                 ["ConnectionStrings:AppDb"] = "Host=placeholder;Database=placeholder;Username=placeholder;Password=placeholder",
                 [SentryWiring.DsnConfigKey] = "",
+                [HangfireWiring.EnabledConfigKey] = "false",
             });
         });
         return base.CreateHost(builder);

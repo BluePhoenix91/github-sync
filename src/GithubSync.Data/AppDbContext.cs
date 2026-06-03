@@ -14,6 +14,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<TargetUser> TargetUsers => Set<TargetUser>();
     public DbSet<WorkItemMapping> WorkItemMappings => Set<WorkItemMapping>();
     public DbSet<DeadLetter> DeadLetters => Set<DeadLetter>();
+    public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
