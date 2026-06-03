@@ -86,10 +86,18 @@ jobs:
       # at the end can bring the old code back up. EF Core wraps each migration in a
       # transaction, so a partial failure leaves the failing migration rolled back and the
       # next deploy resumes from there.
+      #
+      # Hangfire__Enabled=false: efbundle.exe builds the API host at apply time to resolve
+      # the DbContext from DI. This step exposes APP_DB_CONNECTION_STRING but not
+      # ConnectionStrings__AppDb, so AddHangfireScheduler would throw "Hangfire is enabled
+      # but ConnectionStrings:AppDb is missing or blank" before the bundle could connect.
+      # Disabling Hangfire wiring lets the host build cleanly; the bundle reaches the DB
+      # via the --connection arg below regardless of what the DbContext was registered with.
       - name: Apply EF Core migrations
         shell: powershell
         env:
           APP_DB_CONNECTION_STRING: ${{ secrets.APP_DB_CONNECTION_STRING }}
+          Hangfire__Enabled: 'false'
         run: |
           if ([string]::IsNullOrWhiteSpace($env:APP_DB_CONNECTION_STRING)) {
             throw "APP_DB_CONNECTION_STRING secret is empty; cannot apply migrations."
